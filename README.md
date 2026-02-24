@@ -68,15 +68,21 @@ if monitor.connect():
 
 ### Health Check Endpoints
 
-If `HEALTH_CHECK_PORT` is set (default: 8080), the monitor exposes HTTP endpoints:
+If `HEALTH_CHECK_PORT` is set (default: 8080), the monitor exposes:
 
-- `GET /health` - Health check endpoint (returns 200 if healthy, 503 if not)
-- `GET /metrics` - Detailed metrics and statistics
-- `GET /stats` - Alias for `/metrics`
+| Endpoint    | Purpose | Use in production |
+|------------|---------|--------------------|
+| `GET /live`   | Liveness (process up) | Kubernetes **livenessProbe** |
+| `GET /ready`  | Readiness (Kafka connected, healthy) | Kubernetes **readinessProbe** |
+| `GET /health` | Full health (healthy, issues, stats) | General monitoring |
+| `GET /metrics`| Prometheus metrics (default) | Grafana / Prometheus scrape |
+| `GET /metrics?format=json` | JSON metrics | Custom dashboards |
+| `GET /stats`  | Alias for JSON metrics | Legacy |
 
 Example:
 ```bash
-curl http://localhost:8080/health
+curl http://localhost:8080/live
+curl http://localhost:8080/ready
 curl http://localhost:8080/metrics
 ```
 
@@ -193,15 +199,21 @@ The monitor tracks comprehensive metrics:
 
 ## Production Deployment
 
-### Docker Deployment
+### Production checklist
 
-A `Dockerfile` is included in the repository. Build and run:
+- **Config validation** – Required env vars (`KAFKA_BOOTSTRAP_SERVERS`, `KAFKA_TOPICS`) are validated at startup; process exits with code 1 if invalid.
+- **Graceful shutdown** – SIGTERM/SIGINT is handled: current batch is processed, DLQ producer is flushed, then disconnect. Use in Kubernetes and Docker.
+- **No secrets in logs** – Credentials and tokens are never logged.
+- **Liveness vs readiness** – Use `/live` for liveness (process up) and `/ready` for readiness (Kafka connected). Prefer these over `/health` for probes.
+- **Prometheus** – `/metrics` returns Prometheus format by default for Grafana and Prometheus scraping.
+- **Container** – Image runs as non-root user and includes a HEALTHCHECK.
+
+### Docker
+
+Build and run:
 
 ```bash
-# Build image
 docker build -t kafka-monitor .
-
-# Run container
 docker run -d \
   --name kafka-monitor \
   -p 8080:8080 \
@@ -209,7 +221,7 @@ docker run -d \
   kafka-monitor
 ```
 
-Or use docker-compose:
+Or docker-compose:
 
 ```yaml
 version: '3.8'
@@ -223,21 +235,21 @@ services:
     restart: unless-stopped
 ```
 
-### Kubernetes Health Checks
+### Kubernetes probes
 
-Use the health check endpoint for Kubernetes liveness/readiness probes:
+Use `/live` for liveness and `/ready` for readiness:
 
 ```yaml
 livenessProbe:
   httpGet:
-    path: /health
+    path: /live
     port: 8080
-  initialDelaySeconds: 30
+  initialDelaySeconds: 15
   periodSeconds: 10
 
 readinessProbe:
   httpGet:
-    path: /health
+    path: /ready
     port: 8080
   initialDelaySeconds: 5
   periodSeconds: 5

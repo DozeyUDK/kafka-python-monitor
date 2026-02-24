@@ -1,61 +1,67 @@
 """
-Main program - Example usage of Kafka Python Monitor
+Main program - Kafka Python Monitor entrypoint
 
-This is an example script demonstrating how to use the Kafka Python Monitor library.
-It shows how to:
-- Initialize and configure the monitor
-- Set up health check server
-- Handle events with callbacks
-- Use batch processing
-- Gracefully shutdown the monitor
-
-For production use, customize the callbacks and configuration according to your needs.
+Production-ready entrypoint with:
+- SIGINT/SIGTERM handling for graceful shutdown (Kubernetes, Docker)
+- Health check server with liveness/readiness
+- Config validation before start
+- Clean disconnect: drain batch, flush DLQ, then exit
 """
 import sys
 import signal
 import threading
 import os
 import json
+import logging
 from src.kafka_monitor import KafkaMonitor
 from src.health_server import start_health_server
-import logging
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, os.getenv('LOG_LEVEL', 'INFO').upper(), logging.INFO),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
+_shutdown_requested = False
+
 
 def event_callback(event_data: dict):
-    """
-    Example callback function for Kafka events
-    
-    Args:
-        event_data: Dict with event data
-    """
-    # Here you can add your own event processing logic
-    # e.g. database write, alert sending, etc.
-    logger.debug(f"Callback received event: {event_data['value']}")
+    """Callback for each Kafka event. Customize for your use case."""
+    logger.debug("Event received: topic=%s partition=%s", event_data.get('topic'), event_data.get('partition'))
 
 
 def batch_callback(batch: list):
-    """
-    Example batch callback function for processing multiple events at once
-    
-    Args:
-        batch: List of event dicts
-    """
-    logger.info(f"Processing batch of {len(batch)} events")
-    # Here you can add batch processing logic
-    # e.g. bulk database insert, batch API calls, etc.
+    """Callback for batch processing. Customize for bulk operations."""
+    logger.info("Processing batch of %d events", len(batch))
+
+
+def _signal_handler(sig, frame):
+    """Handle SIGINT/SIGTERM for graceful shutdown (no sys.exit in handler)."""
+    global _shutdown_requested
+    if _shutdown_requested:
+        return
+    _shutdown_requested = True
+    logger.info("Received signal %s, initiating graceful shutdown", sig)
+    # Stop monitor loop so it can drain current batch and exit cleanly
+    if _monitor_ref:
+        _monitor_ref.stop()
+
+
+_monitor_ref = None
 
 
 def main():
-    """Main program function"""
+    """Main entrypoint with production shutdown and exit codes."""
+    global _shutdown_requested, _monitor_ref
     monitor = KafkaMonitor()
-    
-    # Start health check server if enabled
+    _monitor_ref = monitor
+
+    # Validate config before starting (fail fast)
+    if not monitor.validate_config():
+        logger.error("Invalid configuration. Check required env vars (e.g. KAFKA_BOOTSTRAP_SERVERS, KAFKA_TOPICS).")
+        sys.exit(1)
+
+    # Health server (liveness/readiness + metrics)
     health_port = int(os.getenv('HEALTH_CHECK_PORT', '8080'))
     health_thread = None
     if health_port > 0:
@@ -65,36 +71,35 @@ def main():
             daemon=True
         )
         health_thread.start()
-    
-    # Handle interrupt signal (Ctrl+C)
-    def signal_handler(sig, frame):
-        logger.info("Received interrupt signal")
-        monitor.stop()
-        monitor.disconnect()
-        sys.exit(0)
-    
-    signal.signal(signal.SIGINT, signal_handler)
-    
-    # Attempt connection
+
+    signal.signal(signal.SIGINT, _signal_handler)
+    signal.signal(signal.SIGTERM, _signal_handler)
+
     if not monitor.connect():
-        logger.error("Failed to connect to Kafka. Check configuration.")
+        logger.error("Failed to connect to Kafka. Check configuration and broker availability.")
         sys.exit(1)
-    
+
+    exit_code = 0
     try:
-        # Start monitoring with callbacks
-        # Use batch_callback if batch processing is preferred, otherwise event_callback
         use_batch = os.getenv('USE_BATCH_PROCESSING', 'false').lower() == 'true'
         if use_batch:
             monitor.monitor(callback=event_callback, batch_callback=batch_callback)
         else:
             monitor.monitor(callback=event_callback)
     except Exception as e:
-        logger.error(f"Error during monitoring: {e}")
+        logger.exception("Error during monitoring: %s", e)
+        exit_code = 1
     finally:
         monitor.disconnect()
-        # Print final stats
         stats = monitor.get_stats()
-        logger.info(f"Final statistics: {json.dumps(stats, indent=2)}")
+        logger.info(
+            "Shutdown complete. events_processed=%s events_failed=%s success_rate=%s",
+            stats.get('events_processed', 0),
+            stats.get('events_failed', 0),
+            stats.get('success_rate', 100),
+        )
+
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

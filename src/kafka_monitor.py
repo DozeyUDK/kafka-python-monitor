@@ -148,7 +148,7 @@ class KafkaMonitor:
         
         # Dead letter queue
         self.dlq_enabled = os.getenv('KAFKA_DLQ_ENABLED', 'false').lower() == 'true'
-        self.dlq_topic = os.getenv('KAFKA_DLQ_TOPIC', f'{self.topics[0]}-dlq')
+        self.dlq_topic = os.getenv('KAFKA_DLQ_TOPIC', f'{self.topics[0]}-dlq' if self.topics else 'dlq')
         
         self.consumer: Optional[KafkaConsumer] = None
         self.dlq_producer: Optional[Any] = None  # Will be KafkaProducer if DLQ enabled
@@ -166,14 +166,29 @@ class KafkaMonitor:
         except Exception as e:
             logger.warning(f"Failed to initialize Elasticsearch exporter: {e}")
         
-        logger.info(f"KafkaMonitor initialized:")
-        logger.info(f"  - Bootstrap servers: {self.bootstrap_servers}")
-        logger.info(f"  - Topics: {self.topics}")
-        logger.info(f"  - Group ID: {self.group_id}")
-        logger.info(f"  - Auto offset reset: {self.auto_offset_reset}")
-        logger.info(f"  - Security protocol: {self.security_protocol}")
-        logger.info(f"  - Batch size: {self.batch_size}")
-        logger.info(f"  - DLQ enabled: {self.dlq_enabled}")
+        # Log config without secrets (production-safe)
+        logger.info(
+            "KafkaMonitor initialized: bootstrap_servers=%s topics=%s group_id=%s security_protocol=%s batch_size=%s dlq_enabled=%s",
+            self.bootstrap_servers,
+            self.topics,
+            self.group_id,
+            self.security_protocol,
+            self.batch_size,
+            self.dlq_enabled,
+        )
+
+    def validate_config(self) -> bool:
+        """Validate required configuration. Returns False if invalid (fail fast)."""
+        if not self.bootstrap_servers or self.bootstrap_servers.strip() == '':
+            logger.error("KAFKA_BOOTSTRAP_SERVERS is required and must be non-empty")
+            return False
+        if not self.topics or all(not t.strip() for t in self.topics):
+            logger.error("KAFKA_TOPICS is required and must contain at least one topic")
+            return False
+        if 'SASL' in self.security_protocol and (not self.sasl_username or not self.sasl_password):
+            logger.error("KAFKA_SASL_USERNAME and KAFKA_SASL_PASSWORD are required when using SASL")
+            return False
+        return True
     
     def _get_consumer_config(self) -> Dict[str, Any]:
         """Build consumer configuration with SSL/SASL support"""
@@ -263,6 +278,7 @@ class KafkaMonitor:
             
             if self.dlq_producer:
                 try:
+                    self.dlq_producer.flush(timeout=10)
                     self.dlq_producer.close()
                 except Exception as e:
                     logger.error(f"Error closing DLQ producer: {e}")

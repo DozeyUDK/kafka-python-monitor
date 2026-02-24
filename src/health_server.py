@@ -23,27 +23,47 @@ class HealthHandler(BaseHTTPRequestHandler):
     
     def do_GET(self):
         """Handle GET requests"""
-        if self.path == '/health':
+        path = self.path.split('?')[0]
+        if path == '/health':
             self._handle_health()
-        elif self.path == '/metrics' or self.path.startswith('/metrics?'):
-            # Check if Prometheus format requested
-            if 'format=prometheus' in self.path or 'Accept' in self.headers and 'text/plain' in self.headers.get('Accept', ''):
-                self._handle_prometheus_metrics()
-            else:
+        elif path == '/live':
+            self._handle_live()
+        elif path == '/ready':
+            self._handle_ready()
+        elif path == '/metrics':
+            # Prometheus format by default (Grafana/K8s); ?format=json for JSON
+            if 'format=json' in (self.path or ''):
                 self._handle_metrics()
-        elif self.path == '/stats':
+            else:
+                self._handle_prometheus_metrics()
+        elif path == '/stats':
             self._handle_stats()
-        elif self.path == '/prometheus':
+        elif path == '/prometheus':
             self._handle_prometheus_metrics()
         else:
             self._send_response(404, {'error': 'Not found'})
     
+    def _handle_live(self):
+        """Liveness: process is running (always 200). For Kubernetes livenessProbe."""
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(b'{"alive": true}\n')
+
+    def _handle_ready(self):
+        """Readiness: ready to consume (Kafka connected). For Kubernetes readinessProbe."""
+        if not self.monitor:
+            self._send_response(503, {'ready': False, 'error': 'Monitor not initialized'})
+            return
+        health = self.monitor.health_check()
+        status_code = 200 if health['healthy'] else 503
+        self._send_response(status_code, {'ready': health['healthy'], 'issues': health.get('issues', [])})
+
     def _handle_health(self):
-        """Handle health check endpoint"""
+        """Full health check (healthy, issues, stats). Use /ready for K8s readiness."""
         if not self.monitor:
             self._send_response(503, {'healthy': False, 'error': 'Monitor not initialized'})
             return
-        
         health = self.monitor.health_check()
         status_code = 200 if health['healthy'] else 503
         self._send_response(status_code, health)
