@@ -328,29 +328,28 @@ class KafkaMonitor:
         except Exception as e:
             logger.error(f"Failed to send event to DLQ: {e}")
     
-    def _process_batch(self, batch: List[Dict[str, Any]], callback: Optional[Callable] = None):
-        """Process a batch of events"""
+    def _process_batch(
+        self,
+        batch: List[Dict[str, Any]],
+        callback: Optional[Callable] = None,
+        batch_callback: Optional[Callable] = None,
+    ):
+        """Process a batch of events. Use batch_callback for the whole batch, else callback per event."""
         if not batch:
             return
         
         try:
-            if callback:
-                # Try batch callback first
-                if hasattr(callback, '__call__'):
-                    try:
-                        callback(batch)
-                        self.metrics.record_batch(len(batch))
-                        for event in batch:
-                            self.metrics.record_event(event['topic'], success=True)
-                            # Export to Elasticsearch if enabled
-                            if self.es_exporter:
-                                self.es_exporter.export_event(event, {'batch_processed': True})
-                        return
-                    except TypeError:
-                        # Fallback to individual processing
-                        pass
+            if batch_callback:
+                # Batch callback: pass whole list
+                batch_callback(batch)
+                self.metrics.record_batch(len(batch))
+                for event in batch:
+                    self.metrics.record_event(event['topic'], success=True)
+                    if self.es_exporter:
+                        self.es_exporter.export_event(event, {'batch_processed': True})
+                return
             
-            # Process individually
+            # Process individually with event callback
             for event_data in batch:
                 try:
                     if callback:
@@ -431,7 +430,7 @@ class KafkaMonitor:
                 if not message_pack:
                     # Process batch if timeout reached
                     if batch and (time.time() - batch_start_time) * 1000 >= self.batch_timeout_ms:
-                        self._process_batch(batch, batch_callback or callback)
+                        self._process_batch(batch, callback=callback, batch_callback=batch_callback)
                         batch = []
                         batch_start_time = time.time()
                     continue
@@ -453,7 +452,7 @@ class KafkaMonitor:
                         
                         # Process batch if size reached
                         if len(batch) >= self.batch_size:
-                            self._process_batch(batch, batch_callback or callback)
+                            self._process_batch(batch, callback=callback, batch_callback=batch_callback)
                             batch = []
                             batch_start_time = time.time()
                 
@@ -480,7 +479,7 @@ class KafkaMonitor:
         
         # Process remaining batch
         if batch:
-            self._process_batch(batch, batch_callback or callback)
+            self._process_batch(batch, callback=callback, batch_callback=batch_callback)
         
         # Flush Elasticsearch buffers
         if self.es_exporter:
