@@ -157,7 +157,9 @@ class HealthHandler(BaseHTTPRequestHandler):
             lines.append(f'# HELP kafka_monitor_consumer_lag Consumer lag per partition')
             lines.append(f'# TYPE kafka_monitor_consumer_lag gauge')
             for partition, lag in stats['lag_by_partition'].items():
-                lines.append(f'kafka_monitor_consumer_lag{{partition="{partition}"}} {lag}')
+                # Ensure partition is string (partition can be int key from defaultdict)
+                partition_str = str(int(partition)) if isinstance(partition, int) else str(partition)
+                lines.append(f'kafka_monitor_consumer_lag{{partition="{partition_str}"}} {lag}')
         
         return '\n'.join(lines) + '\n'
     
@@ -183,8 +185,9 @@ class HealthHandler(BaseHTTPRequestHandler):
 def start_health_server(monitor: KafkaMonitor, port: int = 8080):
     """Start health check HTTP server"""
     HealthHandler.monitor = monitor
-    server = HTTPServer(('0.0.0.0', port), HealthHandler)
-    logger.info(f"Health check server started on port {port}")
+    host = os.getenv('HEALTH_SERVER_HOST', '0.0.0.0')
+    server = HTTPServer((host, port), HealthHandler)
+    logger.info(f"Health check server started on {host}:{port}")
     logger.info(f"  - Health: http://localhost:{port}/health")
     logger.info(f"  - Metrics: http://localhost:{port}/metrics")
     try:

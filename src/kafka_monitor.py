@@ -16,7 +16,7 @@ import logging
 import time
 import json
 from typing import Optional, Callable, List, Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime
 from collections import defaultdict, deque
 from threading import Lock
 from kafka import KafkaConsumer
