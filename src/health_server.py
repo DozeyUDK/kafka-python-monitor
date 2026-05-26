@@ -5,8 +5,11 @@ Provides HTTP endpoints for:
 - Health checks (for Kubernetes/Docker)
 - JSON metrics endpoint
 - Prometheus metrics endpoint (for Grafana integration)
+- Basic authentication (optional)
+- CORS support (configurable)
 """
 import os
+import base64
 import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Optional
@@ -21,8 +24,63 @@ class HealthHandler(BaseHTTPRequestHandler):
     
     monitor: Optional[KafkaMonitor] = None
     
+    # Security configuration (class-level)
+    auth_enabled = False
+    auth_username = ""
+    auth_password = ""
+    cors_enabled = False
+    cors_allowed_origins = "*"
+    
+    def _check_auth(self) -> bool:
+        """Check Basic Auth credentials. Returns True if allowed."""
+        if not self.auth_enabled:
+            return True
+        
+        auth_header = self.headers.get('Authorization', '')
+        if not auth_header.startswith('Basic '):
+            return False
+        
+        try:
+            encoded = auth_header[6:]
+            decoded = base64.b64decode(encoded).decode('utf-8')
+            username, password = decoded.split(':', 1)
+            return username == self.auth_username and password == self.auth_password
+        except Exception:
+            return False
+    
+    def _send_auth_required(self):
+        """Send 401 Unauthorized with WWW-Authenticate header"""
+        self.send_response(401)
+        self.send_header('WWW-Authenticate', 'Basic realm="Kafka Monitor"')
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(b'{"error": "Authentication required"}')
+    
+    def _add_security_headers(self):
+        """Add security headers to response"""
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.send_header('X-Frame-Options', 'DENY')
+        self.send_header('X-XSS-Protection', '1; mode=block')
+        self.send_header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
+        
+        if self.cors_enabled:
+            self.send_header('Access-Control-Allow-Origin', self.cors_allowed_origins)
+            self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
+            self.send_header('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+    
+    def do_OPTIONS(self):
+        """Handle CORS preflight requests"""
+        self.send_response(204)
+        self._add_security_headers()
+        self.end_headers()
+    
     def do_GET(self):
         """Handle GET requests"""
+        # Check authentication
+        if not self._check_auth():
+            self._send_auth_required()
+            return
+        
         path = self.path.split('?')[0]
         if path == '/health':
             self._handle_health()
@@ -46,6 +104,7 @@ class HealthHandler(BaseHTTPRequestHandler):
     def _handle_live(self):
         """Liveness: process is running (always 200). For Kubernetes livenessProbe."""
         self.send_response(200)
+        self._add_security_headers()
         self.send_header('Content-Type', 'application/json')
         self.end_headers()
         self.wfile.write(b'{"alive": true}\n')
@@ -87,6 +146,7 @@ class HealthHandler(BaseHTTPRequestHandler):
         prometheus_output = self._format_prometheus_metrics(stats)
         
         self.send_response(200)
+        self._add_security_headers()
         self.send_header('Content-Type', 'text/plain; version=0.0.4')
         self.end_headers()
         self.wfile.write(prometheus_output.encode('utf-8'))
@@ -168,8 +228,9 @@ class HealthHandler(BaseHTTPRequestHandler):
         self._handle_metrics()
     
     def _send_response(self, status_code: int, data):
-        """Send JSON response"""
+        """Send JSON response with security headers"""
         self.send_response(status_code)
+        self._add_security_headers()
         self.send_header('Content-Type', 'application/json')
         self.end_headers()
         if isinstance(data, dict):
@@ -183,13 +244,33 @@ class HealthHandler(BaseHTTPRequestHandler):
 
 
 def start_health_server(monitor: KafkaMonitor, port: int = 8080):
-    """Start health check HTTP server"""
+    """Start health check HTTP server with optional authentication and CORS"""
     HealthHandler.monitor = monitor
+    
+    # Configure authentication
+    HealthHandler.auth_enabled = os.getenv('HEALTH_AUTH_ENABLED', 'false').lower() == 'true'
+    if HealthHandler.auth_enabled:
+        HealthHandler.auth_username = os.getenv('HEALTH_AUTH_USERNAME', '')
+        HealthHandler.auth_password = os.getenv('HEALTH_AUTH_PASSWORD', '')
+        if not HealthHandler.auth_username or not HealthHandler.auth_password:
+            logger.warning("HEALTH_AUTH_ENABLED=true but credentials not set. Auth DISABLED.")
+            HealthHandler.auth_enabled = False
+        else:
+            logger.info("Basic authentication ENABLED for health server")
+    
+    # Configure CORS
+    HealthHandler.cors_enabled = os.getenv('HEALTH_CORS_ENABLED', 'false').lower() == 'true'
+    if HealthHandler.cors_enabled:
+        HealthHandler.cors_allowed_origins = os.getenv('HEALTH_CORS_ORIGINS', '*')
+        logger.info(f"CORS ENABLED for origins: {HealthHandler.cors_allowed_origins}")
+    
     host = os.getenv('HEALTH_SERVER_HOST', '0.0.0.0')
     server = HTTPServer((host, port), HealthHandler)
     logger.info(f"Health check server started on {host}:{port}")
     logger.info(f"  - Health: http://localhost:{port}/health")
     logger.info(f"  - Metrics: http://localhost:{port}/metrics")
+    logger.info(f"  - Auth: {'ENABLED' if HealthHandler.auth_enabled else 'DISABLED'}")
+    logger.info(f"  - CORS: {'ENABLED' if HealthHandler.cors_enabled else 'DISABLED'}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
