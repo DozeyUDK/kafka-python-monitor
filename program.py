@@ -8,10 +8,14 @@ Production-ready entrypoint with:
 - Clean disconnect: drain batch, flush DLQ, then exit
 """
 import sys
-# kafka-python 2.0.2 nie ma kafka.vendor.six.moves na Python 3.12+ (gh#dpkp/kafka-python#2412)
-if sys.version_info >= (3, 12):
-    import six
-    sys.modules["kafka.vendor.six.moves"] = six.moves
+import six
+# kafka-python 2.0.2 nie ma kafka.vendor.six.moves na Python 3.9+ (gh#dpkp/kafka-python#2412)
+# Patch PRZED importem kafka - symulujemy brakujący modul
+import types
+_kafka_vendor_six = types.ModuleType('kafka.vendor.six.moves')
+_kafka_vendor_six.range = range
+_kafka_vendor_six.builtins = six.moves.builtins
+sys.modules['kafka.vendor.six.moves'] = _kafka_vendor_six
 
 import signal
 import threading
