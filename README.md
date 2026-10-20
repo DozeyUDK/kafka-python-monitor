@@ -6,9 +6,11 @@ This project is a Kafka **consumer and monitor**, not a Kafka broker. The Elasti
 
 ## Architecture
 
-Kafka topics -> consumer group -> optional callback -> Elasticsearch bulk -> Kafka offset commit
+Kafka topics -> consumer group -> initial-position checkpoint (if missing) -> optional callback -> Elasticsearch bulk -> processed-offset commit
 
-The consumer commits offsets **only after** Elasticsearch confirms the complete bulk operation. If indexing fails, the monitor exits nonzero, and a container restart can replay messages from the last committed offsets. Partial Elasticsearch bulk writes are safe to replay: the document ID is derived from topic, partition and offset, and the index date is derived from the Kafka record timestamp.
+For a new consumer group or newly assigned partition without committed offsets, the monitor **synchronously checkpoints the first unprocessed offset before any callback or Elasticsearch export**. This prevents `auto_offset_reset=latest` from skipping a failed first batch on restart. Assigned partitions with no returned records are checkpointed at their current position. These initial commits **do not acknowledge message processing**.
+
+Processed offsets are committed **only after** Elasticsearch confirms the complete bulk operation. If indexing fails, the monitor exits nonzero, and a container restart can replay messages from the last committed offsets. Partial Elasticsearch bulk writes are safe to replay: the document ID is derived from topic, partition and offset, and the index date is derived from the Kafka record timestamp.
 
 Callbacks that perform external side effects are not guaranteed to be idempotent. No distributed transaction exists between Kafka, Elasticsearch, and custom callback services.
 
@@ -95,7 +97,8 @@ KAFKA_AUTO_OFFSET_RESET applies only when the consumer group has no committed of
 
 ## Failure handling and delivery guarantees
 
-- Auto-commit is disabled. Offset commits are synchronous and occur after confirmed Elasticsearch indexing.
+- Auto-commit is disabled. Only initial start positions for partitions without stored offsets may be committed before processing; these checkpoints point to the first **unprocessed** offset.
+- Processed offsets are committed synchronously only after confirmed Elasticsearch indexing. On failed first-batch indexing, restart resumes at the initial checkpoint rather than at the new log end.
 - Any Elasticsearch bulk failure aborts processing and exits nonzero rather than silently dropping queued events.
 - Elasticsearch actions use deterministic IDs, so reprocessing a Kafka offset overwrites its previous document instead of creating another copy.
 - The Kafka record timestamp fixes the index date across retries. Records without a valid timestamp use the stable 1970-01-01 fallback index date.

@@ -10,6 +10,7 @@ from threading import Event, Lock
 from dotenv import load_dotenv
 from kafka import KafkaConsumer, KafkaProducer
 from kafka.errors import KafkaError
+from kafka.structs import OffsetAndMetadata
 
 from src.elasticsearch_exporter import ElasticsearchExporter
 
@@ -126,6 +127,7 @@ class KafkaMonitor:
         self._stop_event = Event()
         self._fatal_error = None
         self._last_metrics_time = time.monotonic()
+        self._initial_offsets_checked = set()
 
     def validate_config(self):
         if not self.bootstrap_servers.strip() or not self.topics or not self.group_id.strip():
@@ -194,6 +196,7 @@ class KafkaMonitor:
                 return False
             try:
                 self.consumer = KafkaConsumer(*self.topics, **self._get_consumer_config())
+                self._initial_offsets_checked.clear()
                 logger.info("Connected to Kafka, topics=%s", self.topics)
                 return True
             except Exception as exc:
@@ -253,6 +256,41 @@ class KafkaMonitor:
             self.metrics.record_event(event["topic"], success=False)
         self.metrics.record_batch(len(batch))
 
+    def _checkpoint_initial_offsets(self, message_pack):
+        """Durably record the reset position of partitions without committed offsets.
+
+        A new group using auto_offset_reset=latest has no restart position until
+        Kafka receives a commit. Persist the *first unprocessed* offset before
+        invoking callbacks or Elasticsearch. Never call commit() without explicit
+        offsets here: poll() has already advanced in-memory consumer positions.
+
+        This includes assigned partitions with no returned records, for which
+        position() supplies the next offset without acknowledging any records.
+        Any failed offset lookup/commit propagates before event processing.
+        """
+        assignment = set(self.consumer.assignment()) | set(message_pack)
+        self._initial_offsets_checked.intersection_update(assignment)
+        unchecked = assignment - self._initial_offsets_checked
+        if not unchecked:
+            return
+
+        initial = {}
+        for tp in sorted(unchecked, key=lambda x: (x.topic, x.partition)):
+            if self.consumer.committed(tp) is not None:
+                continue
+            records = message_pack.get(tp) or ()
+            start = records[0].offset if records else self.consumer.position(tp)
+            if start is None or start < 0:
+                raise RuntimeError("Unable to resolve initial Kafka offset for %s" % (tp,))
+            initial[tp] = OffsetAndMetadata(start, "", -1)
+
+        if initial:
+            # Synchronous, partition-specific commit: no consumed messages are
+            # acknowledged even if the current poll returned many records.
+            self.consumer.commit(offsets=initial)
+            logger.info("Saved initial Kafka offsets for %d partitions", len(initial))
+        self._initial_offsets_checked.update(unchecked)
+
     def _update_lag_metrics(self):
         if not self.consumer:
             return
@@ -310,6 +348,8 @@ class KafkaMonitor:
                             raise ConnectionError("Kafka reconnect attempts exhausted") from exc
                         self.metrics.record_reconnection()
                     continue
+
+                self._checkpoint_initial_offsets(message_pack)
 
                 batch = [
                     {

@@ -2,6 +2,7 @@
 from types import SimpleNamespace
 
 import pytest
+from kafka.structs import TopicPartition
 
 from src.elasticsearch_exporter import ElasticsearchExporter
 from src.kafka_monitor import KafkaMonitor, Metrics
@@ -25,12 +26,19 @@ class FakeConsumer:
         self.records = records
         self.actions = actions
         self.read_count = 0
+        self.tp = TopicPartition(records[0].topic, records[0].partition)
+
+    def assignment(self):
+        return {self.tp}
+
+    def committed(self, tp):
+        return 0  # Existing consumer group: no initial checkpoint needed.
 
     def poll(self, **kwargs):
         assert kwargs["max_records"] == self.monitor.batch_size
         self.read_count += 1
         if self.read_count == 1:
-            return {"partition": self.records}
+            return {self.tp: self.records}
         self.monitor.stop()
         return {}
 

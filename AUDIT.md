@@ -14,6 +14,7 @@ The first hardening pass removed the data-loss hazards in the source. Tests now 
 | Severity | Original finding | Status after hardening |
 | --- | --- | --- |
 | Critical | Kafka auto-commit could advance offsets before Elasticsearch had indexed the events | Fixed: synchronous manual commit after Elasticsearch bulk success |
+| Critical | A new consumer group with auto_offset_reset=latest could skip its failed first batch after restart without any previously committed offset | Fixed: explicitly checkpoint the first unprocessed offset of newly assigned partitions (including idle partitions) before any event processing; fail closed if the checkpoint fails |
 | Critical | Failed Elasticsearch bulk discarded the event buffer | Fixed: no deferred event buffer; bulk exceptions propagate; offsets are not committed |
 | Critical | Elasticsearch connection/indexing errors were hidden and exporter silently disabled itself | Fixed: enabled exporter fails on startup connectivity error and aborts ingestion on bulk failures |
 | High | Kafka SSL settings used an invalid ssl_context dictionary; security protocol was not applied consistently | Fixed: kafka-python ssl_cafile/ssl_certfile/ssl_keyfile and security_protocol for producer and consumer |
@@ -36,17 +37,18 @@ The first hardening pass removed the data-loss hazards in the source. Tests now 
 ## Data handling contract
 
 1. Consume at most KAFKA_BATCH_SIZE messages from Kafka per poll.
-2. Execute callbacks. For individual callback errors, optionally publish to DLQ and wait for Kafka acknowledgement. If DLQ is disabled or unavailable, fail without committing the current poll.
-3. Index all remaining events through synchronous Elasticsearch bulk. Reject partial failures.
-4. Commit the Kafka consumer offset synchronously after indexing succeeds.
-5. On failures before commit, stop the process with a nonzero exit code. Restart replays uncommitted messages, indexed under deterministic identifiers.
+2. On each new partition assignment without a committed offset, synchronously commit its initial position, not its post-poll position. Abort if this checkpoint fails. No records are considered processed by this commit.
+3. Execute callbacks. For individual callback errors, optionally publish to DLQ and wait for Kafka acknowledgement. If DLQ is disabled or unavailable, fail without committing the current poll.
+4. Index all remaining events through synchronous Elasticsearch bulk. Reject partial failures.
+5. Commit the processed Kafka consumer offset synchronously after indexing succeeds.
+6. On failures before a processed-offset commit, stop the process with a nonzero exit code. Restart replays from the last committed position (including the initial checkpoint), indexed under deterministic identifiers.
 
 No atomic commit spans Kafka, Elasticsearch and external callbacks. Custom callbacks should be idempotent.
 
 ## Validation performed
 
 - Source review covering program.py, src/kafka_monitor.py, src/elasticsearch_exporter.py, src/health_server.py, Dockerfile and environment configuration.
-- Offline regression suite: 14 tests passing on the server's test interpreter at time of audit.
+- Offline regression suite: 20 tests passing on the server's test interpreter at time of audit.
 - Runtime test caveat: the server's test interpreter did not include Kafka or Elasticsearch client modules, so the unit suite provided minimal dependency stubs. Real package imports and network behavior **have not** been validated by this result.
 
 ## Release gates
@@ -61,4 +63,4 @@ Before calling this production-ready:
 6. Configure an index template, ILM retention, Kafka permissions, Elasticsearch API key privileges, private health/metrics access and alerting.
 7. Pin the Docker base image to a reviewed digest, lock transitive package versions, scan the image for vulnerabilities and run as non-root.
 
-Audit changes are only in the working snapshot on dozeyserver. They have not been pushed to GitHub.
+Audit changes are under review in Draft PR #2. The PR has not been merged or deployed.

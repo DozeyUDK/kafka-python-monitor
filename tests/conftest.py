@@ -4,6 +4,7 @@ Real dependency imports are used when installed. These minimal stubs only
 enable isolated unit tests; integration testing requires the actual packages.
 """
 import importlib.util
+from collections import namedtuple
 import sys
 import types
 import warnings
@@ -23,6 +24,11 @@ if importlib.util.find_spec("kafka") is None:
     kafka.errors = errors
     sys.modules["kafka"] = kafka
     sys.modules["kafka.errors"] = errors
+    structs = types.ModuleType("kafka.structs")
+    structs.TopicPartition = namedtuple("TopicPartition", "topic partition")
+    structs.OffsetAndMetadata = namedtuple("OffsetAndMetadata", "offset metadata leader_epoch")
+    kafka.structs = structs
+    sys.modules["kafka.structs"] = structs
     warnings.warn("Unit tests using Kafka stub; no broker connection tested.")
 
 if importlib.util.find_spec("elasticsearch") is None:

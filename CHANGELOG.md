@@ -5,6 +5,7 @@
 Initial operational hardening pass:
 
 - Replace Kafka consumer auto-commit with a synchronous commit after confirmed Elasticsearch indexing.
+- Before the first event processing of new/uncommitted partitions, durably checkpoint their initial positions so latest-based restart cannot skip a failed first batch; include idle assignments and fail closed if the checkpoint is rejected.
 - Remove Elasticsearch event buffering that discarded records on bulk failure.
 - Use deterministic Elasticsearch document IDs and index dates derived from Kafka timestamps.
 - Fail fast on Elasticsearch connectivity failures and stop on bulk indexing failure.
