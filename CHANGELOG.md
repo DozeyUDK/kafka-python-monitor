@@ -1,32 +1,21 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
+## Unreleased (2026-10-21)
 
-## [1.0.0] - 2024-01-15
+Initial operational hardening pass:
 
-### Initial Release
+- Replace Kafka consumer auto-commit with a synchronous commit after confirmed Elasticsearch indexing.
+- Remove Elasticsearch event buffering that discarded records on bulk failure.
+- Use deterministic Elasticsearch document IDs and index dates derived from Kafka timestamps.
+- Fail fast on Elasticsearch connectivity failures and stop on bulk indexing failure.
+- Fix Kafka TLS/SASL configuration and wait for DLQ producer acknowledgement.
+- Refresh Kafka and Elasticsearch 8.x Python client dependencies; remove legacy import workaround.
+- Improve liveness/readiness, metric refresh cadence and Kafka lag labeling.
+- Add unit regression tests, basic CI checks and the AUDIT.md release checklist.
+- Rewrite README without unsupported production-readiness claims.
 
-### Added
-- Initial release
-- Multi-topic Kafka monitoring
-- Retry logic with exponential backoff
-- SSL/SASL authentication support
-- Batch processing support
-- Dead Letter Queue (DLQ) functionality
-- Comprehensive metrics collection
-- Health check HTTP endpoints
-- Elasticsearch integration for events and metrics
-- Prometheus metrics endpoint for Grafana
-- Production-ready error handling
-- Graceful shutdown support
+Production release remains blocked by integration, failure-injection and load testing.
 
-### Features
-- Monitor multiple Kafka topics simultaneously
-- Automatic reconnection with configurable retry logic
-- Support for SSL and SASL authentication
-- Batch event processing for better performance
-- Failed event handling via Dead Letter Queue
-- Real-time metrics: throughput, lag, success rate, error rates
-- HTTP health check endpoints for Kubernetes/Docker
-- Elasticsearch export for events and metrics
-- Prometheus-compatible metrics for Grafana dashboards
+## 1.0.0 (previous repository state)
+
+Initial Kafka event monitor with health endpoints, DLQ support, Elasticsearch export, Prometheus metrics, and Docker packaging.

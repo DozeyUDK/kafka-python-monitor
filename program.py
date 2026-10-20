@@ -1,115 +1,84 @@
-"""
-Main program - Kafka Python Monitor entrypoint
-
-Production-ready entrypoint with:
-- SIGINT/SIGTERM handling for graceful shutdown (Kubernetes, Docker)
-- Health check server with liveness/readiness
-- Config validation before start
-- Clean disconnect: drain batch, flush DLQ, then exit
-"""
-import sys
-import six
-# kafka-python 2.0.2 nie ma kafka.vendor.six.moves na Python 3.9+ (gh#dpkp/kafka-python#2412)
-# Patch PRZED importem kafka - symulujemy brakujący modul
-import types
-_kafka_vendor_six = types.ModuleType('kafka.vendor.six.moves')
-_kafka_vendor_six.range = range
-_kafka_vendor_six.builtins = six.moves.builtins
-sys.modules['kafka.vendor.six.moves'] = _kafka_vendor_six
-
-import signal
-import threading
-import os
-import json
+"""Entrypoint for the Kafka-to-Elasticsearch monitor."""
 import logging
+import os
+import signal
+import sys
+import threading
+from http.server import ThreadingHTTPServer
+
+from src.health_server import HealthHandler
 from src.kafka_monitor import KafkaMonitor
-from src.health_server import start_health_server
 
 logging.basicConfig(
-    level=getattr(logging, os.getenv('LOG_LEVEL', 'INFO').upper(), logging.INFO),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 logger = logging.getLogger(__name__)
-
-_shutdown_requested = False
-
-
-def event_callback(event_data: dict):
-    """Callback for each Kafka event. Customize for your use case."""
-    logger.debug("Event received: topic=%s partition=%s", event_data.get('topic'), event_data.get('partition'))
+_monitor = None
 
 
-def batch_callback(batch: list):
-    """Callback for batch processing. Customize for bulk operations."""
-    logger.info("Processing batch of %d events", len(batch))
+def event_callback(event):
+    # Never log message values or credentials by default.
+    logger.debug(
+        "Event topic=%s partition=%s offset=%s",
+        event["topic"], event["partition"], event["offset"],
+    )
 
 
-def _signal_handler(sig, frame):
-    """Handle SIGINT/SIGTERM for graceful shutdown (no sys.exit in handler)."""
-    global _shutdown_requested
-    if _shutdown_requested:
-        return
-    _shutdown_requested = True
-    logger.info("Received signal %s, initiating graceful shutdown", sig)
-    # Stop monitor loop so it can drain current batch and exit cleanly
-    if _monitor_ref:
-        _monitor_ref.stop()
+def batch_callback(batch):
+    logger.debug("Received Kafka batch with %d records", len(batch))
 
 
-_monitor_ref = None
+def _signal_handler(signum, frame):
+    logger.info("Signal %s: requesting graceful stop", signum)
+    if _monitor is not None:
+        _monitor.stop()
 
 
 def main():
-    """Main entrypoint with production shutdown and exit codes."""
-    global _shutdown_requested, _monitor_ref
-    monitor = KafkaMonitor()
-    _monitor_ref = monitor
-
-    # Validate config before starting (fail fast)
-    if not monitor.validate_config():
-        logger.error("Invalid configuration. Check required env vars (e.g. KAFKA_BOOTSTRAP_SERVERS, KAFKA_TOPICS).")
-        sys.exit(1)
-
-    # Health server (liveness/readiness + metrics)
-    health_port = int(os.getenv('HEALTH_CHECK_PORT', '8080'))
-    health_thread = None
-    if health_port > 0:
-        health_thread = threading.Thread(
-            target=start_health_server,
-            args=(monitor, health_port),
-            daemon=True
-        )
-        health_thread.start()
-
-    signal.signal(signal.SIGINT, _signal_handler)
+    global _monitor
     signal.signal(signal.SIGTERM, _signal_handler)
-
-    if not monitor.connect():
-        logger.error("Failed to connect to Kafka. Check configuration and broker availability.")
-        sys.exit(1)
-
-    exit_code = 0
+    signal.signal(signal.SIGINT, _signal_handler)
+    server = None
+    monitor = None
     try:
-        use_batch = os.getenv('USE_BATCH_PROCESSING', 'false').lower() == 'true'
-        if use_batch:
-            monitor.monitor(callback=event_callback, batch_callback=batch_callback)
-        else:
-            monitor.monitor(callback=event_callback)
-    except Exception as e:
-        logger.exception("Error during monitoring: %s", e)
-        exit_code = 1
-    finally:
-        monitor.disconnect()
-        stats = monitor.get_stats()
-        logger.info(
-            "Shutdown complete. events_processed=%s events_failed=%s success_rate=%s",
-            stats.get('events_processed', 0),
-            stats.get('events_failed', 0),
-            stats.get('success_rate', 100),
+        monitor = KafkaMonitor()
+        _monitor = monitor
+        if not monitor.validate_config():
+            return 1
+        port = int(os.getenv("HEALTH_CHECK_PORT", "8080"))
+        if not 0 <= port <= 65535:
+            raise ValueError("HEALTH_CHECK_PORT must be between 0 and 65535")
+        if port:
+            HealthHandler.monitor = monitor
+            host = os.getenv("HEALTH_SERVER_HOST", "127.0.0.1")
+            server = ThreadingHTTPServer((host, port), HealthHandler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            logger.info("Health/metrics HTTP listening on %s:%d", host, port)
+        if not monitor.connect():
+            logger.error("Unable to connect to Kafka")
+            return 1
+        monitor.monitor(
+            callback=event_callback,
+            batch_callback=batch_callback
+            if os.getenv("USE_BATCH_PROCESSING", "false").lower() == "true"
+            else None,
         )
-
-    sys.exit(exit_code)
+        return 0
+    except Exception as exc:
+        logger.error("Monitor exited with error (%s)", type(exc).__name__)
+        return 1
+    finally:
+        if monitor is not None:
+            try:
+                monitor.disconnect()
+            except Exception as exc:
+                logger.error("Disconnect failed (%s)", type(exc).__name__)
+        if server is not None:
+            server.shutdown()
+            server.server_close()
+        _monitor = None
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

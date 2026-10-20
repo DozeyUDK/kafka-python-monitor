@@ -91,6 +91,10 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(prometheus_output.encode('utf-8'))
     
+    @staticmethod
+    def _label(value):
+        return str(value).replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
+
     def _format_prometheus_metrics(self, stats: dict) -> str:
         """Format metrics in Prometheus format"""
         lines = []
@@ -141,7 +145,7 @@ class HealthHandler(BaseHTTPRequestHandler):
             lines.append(f'# HELP kafka_monitor_events_by_topic Events processed per topic')
             lines.append(f'# TYPE kafka_monitor_events_by_topic counter')
             for topic, count in stats['events_by_topic'].items():
-                lines.append(f'kafka_monitor_events_by_topic{{topic="{topic}"}} {count}')
+                lines.append(f'kafka_monitor_events_by_topic{{topic="{self._label(topic)}"}} {count}')
         
         # Error metrics
         if 'errors_by_type' in stats:
@@ -150,16 +154,19 @@ class HealthHandler(BaseHTTPRequestHandler):
             for error_type, count in stats['errors_by_type'].items():
                 # Sanitize error type name for Prometheus
                 error_type_safe = error_type.replace('-', '_').replace('.', '_').replace(' ', '_')
-                lines.append(f'kafka_monitor_errors_by_type{{error_type="{error_type_safe}"}} {count}')
+                lines.append(f'kafka_monitor_errors_by_type{{error_type="{self._label(error_type_safe)}"}} {count}')
         
         # Lag metrics
         if 'lag_by_partition' in stats:
             lines.append(f'# HELP kafka_monitor_consumer_lag Consumer lag per partition')
             lines.append(f'# TYPE kafka_monitor_consumer_lag gauge')
             for partition, lag in stats['lag_by_partition'].items():
-                # Ensure partition is string (partition can be int key from defaultdict)
-                partition_str = str(int(partition)) if isinstance(partition, int) else str(partition)
-                lines.append(f'kafka_monitor_consumer_lag{{partition="{partition_str}"}} {lag}')
+                topic, separator, partition_id = str(partition).rpartition(":")
+                if not separator:
+                    topic, partition_id = "", str(partition)
+                lines.append(
+                    f'kafka_monitor_consumer_lag{{topic="{self._label(topic)}",partition="{self._label(partition_id)}"}} {lag}'
+                )
         
         return '\n'.join(lines) + '\n'
     
@@ -179,13 +186,13 @@ class HealthHandler(BaseHTTPRequestHandler):
     
     def log_message(self, format, *args):
         """Override to use our logger"""
-        logger.info(f"{self.address_string()} - {format % args}")
+        logger.info("%s - %s", self.client_address[0], format % args)
 
 
 def start_health_server(monitor: KafkaMonitor, port: int = 8080):
     """Start health check HTTP server"""
     HealthHandler.monitor = monitor
-    host = os.getenv('HEALTH_SERVER_HOST', '0.0.0.0')
+    host = os.getenv('HEALTH_SERVER_HOST', '127.0.0.1')
     server = HTTPServer((host, port), HealthHandler)
     logger.info(f"Health check server started on {host}:{port}")
     logger.info(f"  - Health: http://localhost:{port}/health")
