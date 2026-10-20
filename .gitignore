@@ -1,4 +1,7 @@
 # Python
+.pytest_cache/
+.coverage
+htmlcov/
 __pycache__/
 *.py[cod]
 *$py.class

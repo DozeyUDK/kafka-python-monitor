@@ -13,11 +13,12 @@ setup(
     name="kafka-python-monitor",
     version="1.0.0",
     author="",
-    description="Production-ready Kafka event monitor for Python with Elasticsearch and Grafana integration",
+    description="Lightweight Kafka consumer with optional Elasticsearch export and Prometheus metrics",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/yourusername/kafka-python-monitor",  # Update with your repository URL
+    url="https://github.com/DozeyUDK/kafka-python-monitor",
     packages=find_packages(),
+    py_modules=["program"],
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
@@ -25,13 +26,11 @@ setup(
         "Topic :: System :: Monitoring",
         "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.8",
-        "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
     ],
-    python_requires=">=3.8",
+    python_requires=">=3.10",
     install_requires=requirements,
     entry_points={
         "console_scripts": [
