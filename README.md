@@ -129,6 +129,14 @@ Before production rollout:
 - env.example: configuration reference.
 - Dockerfile: non-root container.
 
+## Integration, security and operations
+
+The repository includes disposable Docker Compose fixtures for Kafka 3.9.1 and Elasticsearch 8.19.2, real-client integration tests, a CI dependency audit, Kafka/Elasticsearch fault-injection scenarios, and an opt-in throughput/memory benchmark.
+
+Elasticsearch lifecycle policies and strict mappings are versioned under `ops/elasticsearch/`. Applying them is a separate, explicit administrative operation. `deploy/compose.example.yml` provides resource and security boundaries for the monitor container; it does not provision or expose Kafka/Elasticsearch.
+
+See [docs/OPERATIONS.md](docs/OPERATIONS.md) for integration commands, ILM setup, resource limits, alerts, ACL/TLS guidance, and the remaining release gates. The testing cluster disables authentication by design and is never a production deployment.
+
 ## Tests and audit
 
 Run unit tests with the actual installed client packages (unit tests do not contact external services):

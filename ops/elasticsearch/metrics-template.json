@@ -1,0 +1,23 @@
+{
+  "index_patterns": ["kafka-metrics-*"],
+  "priority": 150,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 1,
+      "index.lifecycle.name": "kafka-monitor-metrics-7d",
+      "index.mapping.total_fields.limit": 150
+    },
+    "mappings": {
+      "dynamic": false,
+      "properties": {
+        "@timestamp": {"type": "date"},
+        "events_processed": {"type": "long"},
+        "events_failed": {"type": "long"},
+        "reconnection_count": {"type": "long"},
+        "throughput_events_per_second": {"type": "double"},
+        "success_rate": {"type": "double"}
+      }
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "index_patterns": ["kafka-events-*"],
+  "priority": 150,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 1,
+      "index.lifecycle.name": "kafka-monitor-events-30d",
+      "index.mapping.total_fields.limit": 150
+    },
+    "mappings": {
+      "dynamic": false,
+      "properties": {
+        "@timestamp": {"type": "date"},
+        "kafka_topic": {"type": "keyword", "ignore_above": 512},
+        "kafka_partition": {"type": "integer"},
+        "kafka_offset": {"type": "long"},
+        "kafka_timestamp": {"type": "date", "format": "epoch_millis"},
+        "kafka_key": {"type": "keyword", "ignore_above": 1024},
+        "kafka_value": {"type": "text"}
+      }
+    }
+  }
+}

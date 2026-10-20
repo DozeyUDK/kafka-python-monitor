@@ -2,6 +2,15 @@
 
 ## Unreleased (2026-10-21)
 
+Additional reliability/operations work (next PR):
+
+- Add real-client Kafka 3.9.1 and Elasticsearch 8.19.2 integration workflow with disposable Docker Compose services.
+- Exercise first-batch replay after partial Elasticsearch success, rejected Elasticsearch bulk items, and SIGTERM/restart recovery.
+- Add Elasticsearch index templates, field mappings, 30-day event and 7-day metric lifecycle policies with opt-in administrative application.
+- Add optional throughput/memory smoke benchmark and hardened Docker Compose deployment example.
+- Add known-secret pattern scanning and a Python dependency vulnerability audit to CI.
+- Document network isolation, least-privilege ACL/API keys, retention, metrics, resource limits and remaining release gates.
+
 Initial operational hardening pass:
 
 - Replace Kafka consumer auto-commit with a synchronous commit after confirmed Elasticsearch indexing.
