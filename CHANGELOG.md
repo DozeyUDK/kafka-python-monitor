@@ -10,6 +10,7 @@ Additional reliability/operations work (next PR):
 - Add optional throughput/memory smoke benchmark and hardened Docker Compose deployment example.
 - Add known-secret pattern scanning and a Python dependency vulnerability audit to CI.
 - Upgrade python-dotenv to 1.2.2 after CI vulnerability scan identified an advisory against 1.0.1.
+- Pin the verified Python base image SHA256 and runtime transitive dependency versions in requirements.lock.
 - Document network isolation, least-privilege ACL/API keys, retention, metrics, resource limits and remaining release gates.
 
 Initial operational hardening pass:

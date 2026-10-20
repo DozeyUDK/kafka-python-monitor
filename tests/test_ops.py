@@ -31,6 +31,21 @@ def test_templates_do_not_provision_unbounded_dynamic_fields():
             assert doc["template"]["settings"]["index.mapping.total_fields.limit"] <= 200
 
 
+def test_runtime_dependency_lock_matches_declared_top_level():
+    def parse(path):
+        lines = (ROOT / path).read_text(encoding="utf-8").splitlines()
+        return dict(line.split("==", 1) for line in lines
+                    if line and not line.startswith("#") and "==" in line)
+    top_level = parse("requirements.txt")
+    locked = parse("requirements.lock")
+    for name, version in top_level.items():
+        assert locked[name] == version
+    assert len(locked) >= len(top_level)
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    assert "@sha256:" in dockerfile
+    assert "pip install --no-cache-dir -r requirements.lock" in dockerfile
+
+
 def test_deploy_configuration_does_not_expose_http_publicly():
     text = (ROOT / "deploy" / "compose.example.yml").read_text(encoding="utf-8")
     assert '"127.0.0.1:8080:8080"' in text

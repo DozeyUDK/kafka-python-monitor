@@ -20,7 +20,7 @@ Requires Python 3.10+, an accessible Kafka broker, and Elasticsearch 8.x if inde
 
     python -m venv .venv
     . .venv/bin/activate
-    pip install -r requirements.txt
+    pip install -r requirements.lock
     cp env.example .env
 
 Set KAFKA_BOOTSTRAP_SERVERS, KAFKA_TOPICS, and KAFKA_GROUP_ID in .env. For Elasticsearch export, also set:
@@ -134,6 +134,8 @@ Before production rollout:
 The repository includes disposable Docker Compose fixtures for Kafka 3.9.1 and Elasticsearch 8.19.2, real-client integration tests, a CI dependency audit, Kafka/Elasticsearch fault-injection scenarios, and an opt-in throughput/memory benchmark.
 
 Elasticsearch lifecycle policies and strict mappings are versioned under `ops/elasticsearch/`. Applying them is a separate, explicit administrative operation. `deploy/compose.example.yml` provides resource and security boundaries for the monitor container; it does not provision or expose Kafka/Elasticsearch.
+
+The Dockerfile pins an immutable Python base-image digest, and `requirements.lock` pins direct and transitive runtime dependencies. Updates require passing unit/integration CI and the dependency vulnerability audit.
 
 See [docs/OPERATIONS.md](docs/OPERATIONS.md) for integration commands, ILM setup, resource limits, alerts, ACL/TLS guidance, and the remaining release gates. The testing cluster disables authentication by design and is never a production deployment.
 

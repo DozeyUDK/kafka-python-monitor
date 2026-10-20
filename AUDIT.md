@@ -32,7 +32,7 @@ The first hardening pass removed the data-loss hazards in the source. Tests now 
 | Open | No tested recovery with Kafka leader change, ES 429/503, partial bulk rejection and process SIGTERM | CI now covers injected partial bulk, real ES bulk rejection and SIGTERM/restart. Multi-broker leader change and network partitions still require validation |
 | Open | No committed infrastructure config for index templates, ILM, resource requests/limits or security ACLs | Versioned templates/ILM policies and a hardened Compose example now included. Actual deployment ACLs and resources remain deployment-specific |
 | Open | No measured throughput/memory/performance budget for real message sizes | Opt-in benchmark now available; representative target measurements and SLOs still required |
-| Open | Docker image is not pinned to an immutable digest and transitive dependencies are not locked | Python base image pinned to patch release, and pip-audit workflow added. Full digest and transitive lock still required for audited release |
+| Resolved for baseline | Docker image was not pinned to an immutable digest and transitive dependencies were not locked | Python 3.11.17 Bookworm base image now pinned to a GitHub Actions-observed SHA256 digest; tested transitive versions pinned in requirements.lock and audited in CI. Hash-locking and periodic refresh remain future supply-chain improvements |
 
 ## Data handling contract
 

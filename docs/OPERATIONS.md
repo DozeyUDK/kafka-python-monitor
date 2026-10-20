@@ -14,6 +14,8 @@ This monitor reads Kafka records and optionally indexes them into Elasticsearch 
 
 ## Elasticsearch lifecycle setup (opt-in)
 
+Runtime installation uses `requirements.lock` with exact direct and transitive versions; the Docker base image is pinned to an immutable SHA256 digest verified during CI. Changes to these pins require a new security scan, image build and integration run. This runtime lock does not contain individual wheel hashes and does not replace artifact provenance checks.
+
 The source includes an ILM policy and index template for both streams:
 
 | Index pattern | Policy | Age before delete |
@@ -44,7 +46,7 @@ The integration compose file runs Kafka 3.9.1 in KRaft mode and Elasticsearch 8.
 
 Requires Docker Compose v2 and a host able to run both Java services. On Linux Elasticsearch requires vm.max_map_count of at least 262144.
 
-    python -m pip install -r requirements.txt pytest
+    python -m pip install -r requirements.lock pytest
     docker compose -f tests/integration/compose.yml up -d
     python tests/integration/wait_services.py
     KAFKA_INTEGRATION=1 python -m pytest -q -m integration tests/integration

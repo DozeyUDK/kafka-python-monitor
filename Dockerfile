@@ -1,4 +1,4 @@
-FROM python:3.11.17-slim-bookworm
+FROM python:3.11.17-slim-bookworm@sha256:0a310eeecf4e1f5a0743f9a6520c90c88d089c903ca5fd283f501e3a805f5f89
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -6,8 +6,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HEALTH_CHECK_PORT=8080
 
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt && \
+COPY requirements.lock .
+RUN pip install --no-cache-dir -r requirements.lock && \
     useradd --create-home --shell /usr/sbin/nologin appuser
 
 COPY --chown=appuser:appuser . /app
