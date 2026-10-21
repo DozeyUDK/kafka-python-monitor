@@ -2,6 +2,10 @@
 
 ## Unreleased (2026-10-21)
 
+- Add isolated three-broker Kafka KRaft / Elasticsearch integration CI for a real partition-leader outage, replica promotion and at-least-once replay while one broker is down.
+- Introduce CI-only allowlisted broker stop/start fault injection with strict opt-in, resource limits and teardown; ensure full ISR before the failure scenario.
+- Add offline deployment/CI safety assertions and make the service readiness wait verify the expected broker count when multi-broker CI is requested.
+
 Group rebalance and offset replay regression tests (new PR):
 
 - Simulate a generation change invalidating an offset commit and verify that the batch replays with deterministic Elasticsearch document IDs.

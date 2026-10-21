@@ -8,6 +8,7 @@ from kafka import KafkaAdminClient
 
 BROKER = os.getenv("KAFKA_TEST_BROKER", "localhost:29092")
 ES_URL = os.getenv("ELASTICSEARCH_TEST_URL", "http://localhost:19200")
+EXPECTED_BROKERS = int(os.getenv("KAFKA_EXPECTED_BROKERS", "1"))
 
 def main():
     deadline = time.monotonic() + 150
@@ -17,9 +18,9 @@ def main():
         if not kafka_ready:
             try:
                 admin = KafkaAdminClient(bootstrap_servers=BROKER, request_timeout_ms=5000)
-                admin.list_topics()
+                brokers = admin.describe_cluster()["brokers"]
+                kafka_ready = len(brokers) >= EXPECTED_BROKERS
                 admin.close()
-                kafka_ready = True
             except Exception:
                 pass
         if not elastic_ready:
