@@ -56,13 +56,19 @@ Real integration scenarios include successful indexing, an uncommitted first bat
 
 The GitHub Actions integration workflow starts and destroys these containers automatically on PRs. An integration CI failure blocks release readiness; passing does not establish production SLAs.
 
-### Performance smoke test (opt-in)
+### Paced load correctness and resource profiles
 
-After the disposable Kafka/Elasticsearch compose services are ready:
+The PR integration workflow automatically runs a **bounded 600-record, 8-second** paced producer/consumer test against the disposable local Kafka 3.9.1 and Elasticsearch 8.19.2. It validates *exact record identity*, no duplicate processing, Elasticsearch document count, and final committed offsets for every Kafka partition. It prints one machine-readable `KAFKA_LOAD_REPORT={...}` record with observed throughput, p50/p95/p99 **Kafka timestamp to acknowledged Elasticsearch bulk** latency, elapsed time, and peak RSS. This latency does **not** include the subsequent Kafka offset commit. Failure of completeness/offsets is always a CI failure.
+
+Run the small profile locally only after starting the isolated Compose services:
 
     KAFKA_INTEGRATION=1 python -m pytest -q -s -m performance tests/integration/test_performance.py
 
-The benchmark reports records/s, elapsed seconds and peak resident memory for the process. Default: 500 records of 1024 bytes, distributed across two partitions. Set KAFKA_PERF_EVENTS (1..10000) and KAFKA_PERF_BYTES (1..1048576) to model the intended workload. The GitHub Actions integration workflow also supports a manual **performance** input. Measure sustained peak workloads separately; this benchmark is a smoke test, not a production capacity forecast.
+For a **manual 90-second** paced run, select GitHub Actions → Kafka Elasticsearch Integration → Run workflow → `performance=true`. This runs an extra 3,000-record, 2-KiB test after the short CI gate. Both profiles keep ports on localhost. The benchmark refuses target endpoints other than exactly `localhost:29092` and `http://localhost:19200`.
+
+Configurable variables: `KAFKA_PERF_EVENTS` (100..20,000), `KAFKA_PERF_BYTES` (64..65,536), `KAFKA_PERF_PARTITIONS` (1..4), `KAFKA_PERF_DURATION_SECONDS` (3..300), `KAFKA_PERF_BATCH_SIZE` (1..500), `KAFKA_PERF_MAX_RSS_MIB` (64..4,096). Optional SLO gates `KAFKA_PERF_MIN_EPS` and `KAFKA_PERF_MAX_P95_SECONDS` default to zero (**disabled**); set them from measurements in a stable target environment, **not arbitrary GitHub runner performance**. The max RSS bound defaults to 512 MiB.
+
+This is a finite, paced functional and resource benchmark, not an overnight soak, leak regression or production load certification. GitHub runner hardware and test Elasticsearch settings differ from production. Final sustained rates, larger payloads/partition counts, max-poll-interval headroom, ES retry budgets, and alerts must be measured in target staging before production approval.
 
 ## Multi-broker leader failover (isolated CI)
 

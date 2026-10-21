@@ -2,6 +2,11 @@
 
 ## Unreleased (2026-10-21)
 
+- Replace the opt-in 500-event timing smoke with a concurrent, rate-paced Kafka-to-Elasticsearch completeness and resource benchmark.
+- Run a bounded 600-event/8-second correctness gate on every integration PR, and a separate 3,000-event/90-second manual performance profile.
+- Report bulk-ack indexing latency percentiles, throughput, peak RSS, deduplicated record count, Elasticsearch document count and final committed offsets.
+- Bound configurable workload settings and target endpoints, and support explicit optional performance SLO thresholds without imposing arbitrary GitHub-hosted runner throughput gates.
+
 - Add isolated three-broker Kafka KRaft / Elasticsearch integration CI for a real partition-leader outage, replica promotion and at-least-once replay while one broker is down.
 - Introduce CI-only allowlisted broker stop/start fault injection with strict opt-in, resource limits and teardown; ensure full ISR before the failure scenario.
 - Add offline deployment/CI safety assertions and make the service readiness wait verify the expected broker count when multi-broker CI is requested.
