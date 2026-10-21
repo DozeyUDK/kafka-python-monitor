@@ -39,6 +39,7 @@ def test_two_consumers_rebalance_and_recover_without_missing_documents(
     continue_processing = threading.Event()
     primary_failures = []
     peer_thread = None
+    monitor_closed = False
     peer_join_started = threading.Event()
     peer_joined = threading.Event()
     peer_errors = []
@@ -88,9 +89,14 @@ def test_two_consumers_rebalance_and_recover_without_missing_documents(
         assert peer_join_started.wait(10)
         time.sleep(0.5)
         continue_processing.set()
-        thread.join(timeout=30)
+        thread.join(timeout=20)
         assert not thread.is_alive()
-        peer_thread.join(timeout=30)
+        # LeaveGroup must happen *before* awaiting the peer assignment.
+        # Otherwise the original member may block the rebalance for Kafka's
+        # default max.poll.interval.ms (300s) even after monitor() stops.
+        monitor.disconnect()
+        monitor_closed = True
+        peer_thread.join(timeout=20)
         assert peer_joined.is_set(), "Second consumer never completed group rebalance"
         assert not peer_errors
     finally:
@@ -101,7 +107,8 @@ def test_two_consumers_rebalance_and_recover_without_missing_documents(
             peer_thread.join(timeout=5)
         monitor.stop()
         thread.join(timeout=5)
-        monitor.disconnect()
+        if not monitor_closed:
+            monitor.disconnect()
 
     # After all generation members depart, replacement joins the same group.
     # It must index every remaining unacknowledged Kafka offset, including a
