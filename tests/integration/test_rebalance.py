@@ -1,7 +1,9 @@
-"""Exercise a *real* Kafka group rebalance while an Elasticsearch export is pending.
+"""Rebalance/replay with an observable Kafka coordinator-state barrier.
 
-The single-broker CI fixture can validate consumer generation/replay semantics.
-It cannot establish resilience to an actual broker leader failure.
+A single-broker fixture can verify consumer-group reassignment and recovery,
+not broker leader/controller failover. The processed-offset commit rejection
+is deliberately injected *after* observing the real group rebalance because
+whether Kafka itself rejects that exact request is timing-dependent.
 """
 import os
 import threading
@@ -21,13 +23,33 @@ pytestmark = [
 ]
 
 
+def wait_for_coordinator_rebalance(admin, group_id, *, timeout=20):
+    """Only return once the broker reports a genuine pending group rebalance."""
+    deadline = time.monotonic() + timeout
+    states = []
+    while time.monotonic() < deadline:
+        descriptions = admin.describe_consumer_groups([group_id])
+        assert len(descriptions) == 1
+        state = descriptions[0].state
+        states.append(state)
+        if state == "PreparingRebalance":
+            return states
+        time.sleep(0.2)
+    pytest.fail(
+        "Kafka never entered PreparingRebalance with the peer joining; "
+        "observed states: %s" % states
+    )
+
+
 def test_two_consumers_rebalance_and_recover_without_missing_documents(
     clients, kafka_topic, monkeypatch
 ):
     from kafka import KafkaConsumer
+    from kafka.errors import RebalanceInProgressError
+    from kafka.structs import TopicPartition
 
     broker = os.getenv("KAFKA_TEST_BROKER", "localhost:29092")
-    _, producer, es = clients
+    admin, producer, es = clients
     group = "monitor-rebalance-ci-" + uuid.uuid4().hex
     count = 12
     send(producer, kafka_topic, 0, count // 2, prefix="rb0")
@@ -37,89 +59,121 @@ def test_two_consumers_rebalance_and_recover_without_missing_documents(
     monitor = new_monitor(monkeypatch, kafka_topic, group, reset="earliest")
     first_seen = threading.Event()
     continue_processing = threading.Event()
+    commit_rejected = threading.Event()
+    first_records = []
     primary_failures = []
+    peer_errors = []
+    peer_joined = threading.Event()
     peer_thread = None
     monitor_closed = False
-    peer_join_started = threading.Event()
-    peer_joined = threading.Event()
-    peer_errors = []
+    competitor = None
 
     def callback(event):
+        first_records.append(event)
         first_seen.set()
-        if not continue_processing.wait(20):
-            raise TimeoutError("Timed out waiting for second consumer to join")
-        monitor.stop()  # First record still must be exported before acknowledgement.
+        if not continue_processing.wait(40):
+            raise TimeoutError("No coordinator rebalance observed")
+        monitor.stop()  # Export finishes before the processed-offset commit.
 
     def primary_worker():
         try:
             monitor.monitor(callback=callback)
         except Exception as exc:
-            # A generation change can invalidate the in-flight commit.
             primary_failures.append(exc)
 
     thread = threading.Thread(target=primary_worker, daemon=True)
-    competitor = None
-    replacement = None
-    secondary_thread = None
     try:
         thread.start()
         assert first_seen.wait(20), "First consumer never received a Kafka event"
+        assert len(first_records) == 1
+        first = first_records[0]
+        tp = TopicPartition(first["topic"], first["partition"])
+        # No processed message has been acknowledged before the callback.
+        before = admin.list_consumer_group_offsets(group)
+        assert before[tp].offset == first["offset"]
 
         competitor = KafkaConsumer(
             kafka_topic, bootstrap_servers=broker, group_id=group,
             auto_offset_reset="earliest", enable_auto_commit=False,
             consumer_timeout_ms=20000,
         )
-        # Join concurrently: Kafka may wait for the first member's next poll
-        # before finishing a rebalance. Waiting for assignment while first
-        # member is held in a callback would deadlock the test.
+
         def peer_worker():
-            peer_join_started.set()
             try:
                 for _ in range(40):
                     competitor.poll(timeout_ms=400, max_records=1)
                     if competitor.assignment():
                         peer_joined.set()
-                        break
+                        return
             except Exception as exc:
                 peer_errors.append(exc)
 
         peer_thread = threading.Thread(target=peer_worker, daemon=True)
         peer_thread.start()
-        assert peer_join_started.wait(10)
-        time.sleep(0.5)
+
+        # A deterministic barrier: the broker's coordinator must have begun
+        # rebalancing BEFORE callback processing resumes. A sleep or a thread
+        # start signal cannot establish this ordering.
+        observed_states = wait_for_coordinator_rebalance(admin, group)
+        assert "PreparingRebalance" in observed_states
+
+        # Broker-side commit acceptance during PreparingRebalance varies with
+        # race timing and group generation. Inject a commit rejection only for
+        # the *processed* offset, leaving genuine initial checkpoints intact.
+        original_commit = monitor.consumer.commit
+
+        def commit_with_generation_rejection(offsets=None):
+            assert offsets is not None
+            if any(meta.offset > before[partition].offset
+                   for partition, meta in offsets.items() if partition in before):
+                commit_rejected.set()
+                raise RebalanceInProgressError("injected in-flight processed commit rejection")
+            return original_commit(offsets=offsets)
+
+        monitor.consumer.commit = commit_with_generation_rejection
         continue_processing.set()
         thread.join(timeout=20)
-        assert not thread.is_alive()
-        # LeaveGroup must happen *before* awaiting the peer assignment.
-        # Otherwise the original member may block the rebalance for Kafka's
-        # default max.poll.interval.ms (300s) even after monitor() stops.
+        assert not thread.is_alive(), "Primary did not stop on commit failure"
+        assert commit_rejected.is_set(), "Processed-offset commit rejection was not exercised"
+        assert len(primary_failures) == 1
+        assert isinstance(primary_failures[0], RebalanceInProgressError)
+        assert monitor._fatal_error == "RebalanceInProgressError"
+
+        # Explicit LeaveGroup before waiting for the peer's assignment;
+        # otherwise Kafka may defer group completion for max.poll.interval.
         monitor.disconnect()
         monitor_closed = True
+        assert event_count(es, kafka_topic) == 1  # Indexed, not yet committed.
         peer_thread.join(timeout=20)
-        assert peer_joined.is_set(), "Second consumer never completed group rebalance"
+        assert peer_joined.is_set(), "Peer did not receive partitions after LeaveGroup"
         assert not peer_errors
     finally:
         continue_processing.set()
-        if competitor is not None:
-            competitor.close()
-        if peer_thread is not None:
-            peer_thread.join(timeout=5)
         monitor.stop()
         thread.join(timeout=5)
         if not monitor_closed:
             monitor.disconnect()
+        if competitor is not None:
+            if peer_thread is not None:
+                peer_thread.join(timeout=5)
+            competitor.close()
 
-    # After all generation members depart, replacement joins the same group.
-    # It must index every remaining unacknowledged Kafka offset, including a
-    # possible replay of the already-indexed-but-not-committed first record.
+    # The committed group offset must still point to the exported first
+    # record. It has to be replayed, not silently acknowledged.
+    persisted = admin.list_consumer_group_offsets(group)
+    assert persisted[tp].offset == first["offset"]
+
     replacement = new_monitor(monkeypatch, kafka_topic, group, reset="earliest")
     monitor_done = threading.Event()
     secondary_failures = []
+    replayed = []
+
+    def after_restart(event):
+        replayed.append((event["topic"], event["partition"], event["offset"]))
 
     def replacement_worker():
         try:
-            replacement.monitor()
+            replacement.monitor(callback=after_restart)
         except Exception as exc:
             secondary_failures.append(exc)
         finally:
@@ -129,18 +183,20 @@ def test_two_consumers_rebalance_and_recover_without_missing_documents(
     try:
         secondary_thread.start()
         deadline = time.monotonic() + 30
-        last_count = 0
         while time.monotonic() < deadline:
-            last_count = event_count(es, kafka_topic)
-            if last_count == count:
+            if event_count(es, kafka_topic) == count:
                 break
             time.sleep(0.5)
-        assert last_count == count, (
-            "Rebalance/restart lost indexed Kafka messages: %s/%s" % (last_count, count)
+        assert event_count(es, kafka_topic) == count, "Missing indexed records after replay"
+        assert (first["topic"], first["partition"], first["offset"]) in replayed, (
+            "Already-exported-but-uncommitted record was not replayed"
         )
         replacement.stop()
-        assert monitor_done.wait(10), "Recovery consumer did not shut down"
+        assert monitor_done.wait(10), "Recovery consumer did not stop"
         assert not secondary_failures, "Recovery consumer failed: %r" % secondary_failures
+        final = admin.list_consumer_group_offsets(group)
+        for partition in (0, 1):
+            assert final[TopicPartition(kafka_topic, partition)].offset == count // 2
     finally:
         replacement.stop()
         secondary_thread.join(timeout=10)

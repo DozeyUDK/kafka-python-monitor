@@ -5,7 +5,7 @@
 Group rebalance and offset replay regression tests (new PR):
 
 - Simulate a generation change invalidating an offset commit and verify that the batch replays with deterministic Elasticsearch document IDs.
-- Exercise actual two-consumer group rebalancing on the disposable Kafka/Elasticsearch CI stack, verifying the final indexed record count.
+- Exercise actual two-consumer group rebalancing on the disposable Kafka/Elasticsearch CI stack; synchronize with the broker's PreparingRebalance state, inject a processed-commit rejection, and verify the already-indexed event is replayed without missing records.
 - Keep multi-broker leader/controller loss as a separate release gate; the single-broker test does not cover it.
 
 Consumer acknowledgement and readiness hardening (follow-up PR):
