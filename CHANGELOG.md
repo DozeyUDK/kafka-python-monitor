@@ -2,6 +2,12 @@
 
 ## Unreleased (2026-10-21)
 
+Consumer acknowledgement and readiness hardening (follow-up PR):
+
+- Commit only the offset after the last processed record for each topic-partition present in the current poll, rather than committing all consumer positions.
+- Refuse readiness until the first successful poll, or when polling has stalled beyond the configurable `KAFKA_POLL_STALE_SECONDS` timeout.
+- Expose poll and processed-commit age gauges, add targeted unit regressions, and document the limitation of poll freshness checks.
+
 Additional reliability/operations work (next PR):
 
 - Add real-client Kafka 3.9.1 and Elasticsearch 8.19.2 integration workflow with disposable Docker Compose services.

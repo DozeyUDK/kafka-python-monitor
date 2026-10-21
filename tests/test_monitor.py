@@ -2,7 +2,7 @@
 from types import SimpleNamespace
 
 import pytest
-from kafka.structs import TopicPartition
+from kafka.structs import OffsetAndMetadata, TopicPartition
 
 from src.elasticsearch_exporter import ElasticsearchExporter
 from src.kafka_monitor import KafkaMonitor, Metrics
@@ -42,7 +42,8 @@ class FakeConsumer:
         self.monitor.stop()
         return {}
 
-    def commit(self):
+    def commit(self, offsets=None):
+        assert offsets == {self.tp: OffsetAndMetadata(self.records[-1].offset + 1, "", -1)}
         self.actions.append("commit")
 
     def close(self):
@@ -147,6 +148,7 @@ def test_successful_bulk_precedes_offset_commit(monkeypatch):
     monitor.monitor()
     assert actions == ["export", "commit"]
     assert monitor.metrics.get_stats()["events_processed"] == 1
+    assert monitor.get_stats()["last_processed_commit_age_seconds"] is not None
 
 
 def test_failed_elasticsearch_bulk_never_commits(monkeypatch):
