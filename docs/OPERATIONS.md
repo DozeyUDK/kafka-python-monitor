@@ -6,7 +6,7 @@ This monitor reads Kafka records and optionally indexes them into Elasticsearch 
 
 - The consumer group ID must be stable across restarts and unique to the monitor's workstream.
 - For an uncommitted partition, the initial Kafka position is saved synchronously before records are processed. For committed partitions, the saved offset is never overridden.
-- Processed Kafka offsets are synchronously committed after the entire Elasticsearch bulk operation completes.
+- Processed Kafka offsets are synchronously committed after the entire Elasticsearch bulk operation completes. The explicit commit mapping includes only offsets from successfully processed records in the current poll; unrelated assigned partitions are not advanced.
 - A rejected Elasticsearch bulk item aborts the batch. A restart replays events using stable Elasticsearch document IDs.
 - Kafka source retention must exceed the **maximum expected downtime plus catch-up duration**. If brokers delete uncommitted events, no consumer can restore them.
 - The system does not provide a distributed transaction across Kafka, Elasticsearch and callbacks. Custom callbacks must be idempotent.
@@ -95,6 +95,9 @@ Production recommendations:
 ## Suggested monitoring and runbook
 
 Scrape /metrics on a private network and alert on:
+
+- `/ready` returns 503 until Kafka has completed its first poll or whenever the most recent successful poll is older than `KAFKA_POLL_STALE_SECONDS` (default 120). Tune the threshold to exceed worst-case processing/poll duration. A successful empty poll is healthy; the freshness check does not establish broker-wide availability.
+- Use `kafka_monitor_poll_age_seconds` to identify polling stalls. `kafka_monitor_processed_commit_age_seconds` shows time since the last acknowledged record batch; on idle topics it can grow indefinitely, so combine it with lag and traffic rather than alerting on that age alone.
 
 - Kafka monitor readiness false for longer than deployment startup allowance.
 - Sustained consumer lag growth by topic/partition, with a threshold based on your expected throughput.

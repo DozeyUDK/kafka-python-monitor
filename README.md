@@ -2,7 +2,7 @@
 
 A small Python service that consumes records from Apache Kafka and optionally indexes them into Elasticsearch. It exposes liveness, readiness, JSON status, and Prometheus metrics over HTTP.
 
-This project is a Kafka **consumer and monitor**, not a Kafka broker. The Elasticsearch ingestion path is designed for **at-least-once delivery**, with deterministic Elasticsearch document IDs to make replay safe for indexed records. The project still requires an end-to-end integration and load test before a production release.
+This project is a Kafka **consumer and monitor**, not a Kafka broker. The Elasticsearch ingestion path is designed for **at-least-once delivery**, with deterministic Elasticsearch document IDs to make replay safe for indexed records. Real Kafka/Elasticsearch integration tests run in CI; production rollout still requires target-environment validation and representative load testing.
 
 ## Architecture
 
@@ -10,7 +10,7 @@ Kafka topics -> consumer group -> initial-position checkpoint (if missing) -> op
 
 For a new consumer group or newly assigned partition without committed offsets, the monitor **synchronously checkpoints the first unprocessed offset before any callback or Elasticsearch export**. This prevents `auto_offset_reset=latest` from skipping a failed first batch on restart. Assigned partitions with no returned records are checkpointed at their current position. These initial commits **do not acknowledge message processing**.
 
-Processed offsets are committed **only after** Elasticsearch confirms the complete bulk operation. If indexing fails, the monitor exits nonzero, and a container restart can replay messages from the last committed offsets. Partial Elasticsearch bulk writes are safe to replay: the document ID is derived from topic, partition and offset, and the index date is derived from the Kafka record timestamp.
+Processed offsets are committed for **exactly the topic partitions returned in that poll** and only after Elasticsearch confirms the complete bulk operation. The consumer never implicitly commits unrelated assigned partitions or positions. If indexing fails, the monitor exits nonzero, and a container restart can replay messages from the last committed offsets. Partial Elasticsearch bulk writes are safe to replay: the document ID is derived from topic, partition and offset, and the index date is derived from the Kafka record timestamp.
 
 Callbacks that perform external side effects are not guaranteed to be idempotent. No distributed transaction exists between Kafka, Elasticsearch, and custom callback services.
 
@@ -58,7 +58,7 @@ Docker HEALTHCHECK uses /live. Container health does not imply successful ingest
 | Route | Behavior |
 | --- | --- |
 | GET /live | 200 while the HTTP server is responding |
-| GET /ready | 200 only while Kafka consumption is active and the exporter has not failed |
+| GET /ready | 200 after a successful recent Kafka poll while the consumer runs, provided the exporter has not failed |
 | GET /health | JSON health status, 200/503 |
 | GET /metrics | Prometheus text exposition |
 | GET /metrics?format=json | JSON statistics |
@@ -66,7 +66,9 @@ Docker HEALTHCHECK uses /live. Container health does not imply successful ingest
 
 The default HTTP bind address is 127.0.0.1 outside the container; default port is 8080. The HTTP server is optional: set HEALTH_CHECK_PORT=0 to disable it, but remove or adjust the Docker HEALTHCHECK in that case.
 
-Metrics reset on process restart. Kafka consumer lag is sampled periodically and is keyed by topic and partition.
+Metrics reset on process restart. Kafka consumer lag is sampled periodically and is keyed by topic and partition. `KAFKA_POLL_STALE_SECONDS` (default: 120) controls the readiness timeout: before the first poll, or after an abnormally long gap without a successful poll, `/ready` returns 503. Tune this higher than expected worst-case bulk processing and poll durations. An idle topic is not unhealthy as long as Kafka `poll()` continues returning successfully. This is a **poll freshness check**, not an independent broker-wide network connectivity guarantee.
+
+Prometheus metrics `kafka_monitor_poll_age_seconds` and `kafka_monitor_processed_commit_age_seconds` expose the age of the most recent successful poll and processed-batch commit. Those time series are absent until the first respective successful observation.
 
 ## Configuration
 
@@ -79,6 +81,7 @@ The supplied env.example documents the supported environment variables. Importan
 | KAFKA_GROUP_ID | Persistent consumer group | kafka-monitor-group |
 | KAFKA_AUTO_OFFSET_RESET | Behavior without committed offsets: earliest/latest | latest |
 | KAFKA_BATCH_SIZE | Maximum records requested per poll | 100 |
+| KAFKA_POLL_STALE_SECONDS | Readiness poll freshness timeout | 120 |
 | MONITOR_INTERVAL_SECONDS | Kafka poll timeout | 5 |
 | METRICS_INTERVAL_SECONDS | Lag/Elasticsearch metrics export interval | 30 |
 | KAFKA_MAX_RETRIES | Connection attempt limit per reconnect cycle | 5 |

@@ -106,6 +106,7 @@ class KafkaMonitor:
         self.consumer_timeout_ms = int(os.getenv("KAFKA_CONSUMER_TIMEOUT_MS", "5000"))
         self.batch_size = int(os.getenv("KAFKA_BATCH_SIZE", "100"))
         self.metrics_interval = int(os.getenv("METRICS_INTERVAL_SECONDS", "30"))
+        self.poll_stale_seconds = int(os.getenv("KAFKA_POLL_STALE_SECONDS", "120"))
         self.max_retries = int(os.getenv("KAFKA_MAX_RETRIES", "5"))
         self.retry_backoff_ms = int(os.getenv("KAFKA_RETRY_BACKOFF_MS", "1000"))
         self.reconnect_interval = int(os.getenv("KAFKA_RECONNECT_INTERVAL_SECONDS", "5"))
@@ -128,6 +129,8 @@ class KafkaMonitor:
         self._fatal_error = None
         self._last_metrics_time = time.monotonic()
         self._initial_offsets_checked = set()
+        self._last_successful_poll = None
+        self._last_acknowledged_batch = None
 
     def validate_config(self):
         if not self.bootstrap_servers.strip() or not self.topics or not self.group_id.strip():
@@ -147,7 +150,8 @@ class KafkaMonitor:
             return False
         if (self.batch_size < 1 or self.monitor_interval_ms < 0 or
             self.metrics_interval < 1 or self.max_retries < 1 or
-            self.retry_backoff_ms < 0 or self.reconnect_interval < 0):
+            self.retry_backoff_ms < 0 or self.reconnect_interval < 0 or
+            self.poll_stale_seconds < 1):
             logger.error("Invalid numeric Kafka monitor configuration")
             return False
         if self.dlq_enabled and not self.dlq_topic.strip():
@@ -197,6 +201,7 @@ class KafkaMonitor:
             try:
                 self.consumer = KafkaConsumer(*self.topics, **self._get_consumer_config())
                 self._initial_offsets_checked.clear()
+                self._last_successful_poll = None
                 logger.info("Connected to Kafka, topics=%s", self.topics)
                 return True
             except Exception as exc:
@@ -291,6 +296,24 @@ class KafkaMonitor:
             logger.info("Saved initial Kafka offsets for %d partitions", len(initial))
         self._initial_offsets_checked.update(unchecked)
 
+    def _commit_processed_offsets(self, message_pack):
+        """Commit only the offsets acknowledged by this exact Kafka poll.
+
+        The consumer may track other assigned partitions and internal positions.
+        Those positions are not evidence that their events were exported. The
+        commit is explicit, partition-scoped and advances to last offset + 1
+        exclusively for partitions whose entire returned batch succeeded.
+        """
+        offsets = {
+            tp: OffsetAndMetadata(messages[-1].offset + 1, "", -1)
+            for tp, messages in message_pack.items() if messages
+        }
+        if not offsets:
+            return
+        # Failure is deliberately fatal: the batch will replay on restart.
+        self.consumer.commit(offsets=offsets)
+        self._last_acknowledged_batch = time.monotonic()
+
     def _update_lag_metrics(self):
         if not self.consumer:
             return
@@ -335,6 +358,7 @@ class KafkaMonitor:
                     message_pack = self.consumer.poll(
                         timeout_ms=self.monitor_interval_ms, max_records=self.batch_size
                     )
+                    self._last_successful_poll = time.monotonic()
                 except KafkaError as exc:
                     self.metrics.record_error(type(exc).__name__)
                     logger.warning("Kafka poll failure; reconnecting (%s)", type(exc).__name__)
@@ -364,8 +388,8 @@ class KafkaMonitor:
                 ]
                 if batch:
                     self._process_batch(batch, callback=callback, batch_callback=batch_callback)
-                    # Synchronous commit only after all side effects succeed.
-                    self.consumer.commit()
+                    # Acknowledge exactly the partitions/records in this batch.
+                    self._commit_processed_offsets(message_pack)
                 self._report_metrics()
         except Exception as exc:
             self._fatal_error = type(exc).__name__
@@ -396,14 +420,23 @@ class KafkaMonitor:
 
     def get_stats(self):
         stats = self.metrics.get_stats()
+        poll_age = (time.monotonic() - self._last_successful_poll
+                    if self._last_successful_poll is not None else None)
         stats.update({
             "topics": self.topics,
             "group_id": self.group_id,
             "is_running": self.is_running,
-            "is_connected": self.consumer is not None,
+            # Recent successful polling is a useful readiness signal but not
+            # an independent active network probe of every Kafka broker.
+            "is_connected": (
+                self.consumer is not None and self.is_running
+                and poll_age is not None and poll_age <= self.poll_stale_seconds
+            ),
             "batch_size": self.batch_size,
             "dlq_enabled": self.dlq_enabled,
             "elasticsearch_enabled": self.es_exporter.enabled,
+            "poll_age_seconds": round(poll_age, 2) if poll_age is not None else None,
+            "last_processed_commit_age_seconds": round(time.monotonic() - self._last_acknowledged_batch, 2) if self._last_acknowledged_batch is not None else None,
         })
         return stats
 
@@ -411,6 +444,10 @@ class KafkaMonitor:
         issues = []
         if self.consumer is None or not self.is_running:
             issues.append("Kafka consumer is not running")
+        elif self._last_successful_poll is None:
+            issues.append("Kafka consumer has not completed a poll")
+        elif time.monotonic() - self._last_successful_poll > self.poll_stale_seconds:
+            issues.append("Kafka consumer polling stalled")
         if self._fatal_error:
             issues.append("Fatal error: " + self._fatal_error)
         if self.es_exporter.enabled and (self.es_exporter.client is None or not self._es_healthy):

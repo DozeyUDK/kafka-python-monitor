@@ -60,18 +60,18 @@ class TrackingConsumer:
         return self.last_poll
 
     def commit(self, offsets=None):
-        if offsets is not None:
-            self.calls.append(("checkpoint", dict(offsets)))
-            if self.fail_checkpoint:
-                raise ConnectionError("checkpoint not acknowledged")
-            for tp, value in offsets.items():
-                assert isinstance(value, OffsetAndMetadata)
-                self.group_offsets[tp] = value.offset
-        else:
-            self.calls.append(("ack", None))
-            for tp, records in self.last_poll.items():
-                if records:
-                    self.group_offsets[tp] = records[-1].offset + 1
+        assert offsets, "Do not acknowledge implicit Kafka consumer positions"
+        is_ack = any(
+            records and tp in offsets
+            and offsets[tp].offset == records[-1].offset + 1
+            for tp, records in self.last_poll.items()
+        )
+        self.calls.append(("ack" if is_ack else "checkpoint", dict(offsets)))
+        if self.fail_checkpoint and not is_ack:
+            raise ConnectionError("checkpoint not acknowledged")
+        for tp, value in offsets.items():
+            assert isinstance(value, OffsetAndMetadata)
+            self.group_offsets[tp] = value.offset
 
     def close(self):
         pass
@@ -167,7 +167,7 @@ def test_only_uncommitted_partitions_are_initially_checkpointed(monkeypatch):
     monitor.monitor()
 
     assert consumer.calls[1] == ("checkpoint", {added: OffsetAndMetadata(90, "", -1)})
-    assert consumer.calls[2] == ("ack", None)
+    assert consumer.calls[2] == ("ack", {old: OffsetAndMetadata(41, "", -1), added: OffsetAndMetadata(91, "", -1)})
     assert offsets == {old: 41, added: 91}
 
 

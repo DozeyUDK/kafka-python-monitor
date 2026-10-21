@@ -140,6 +140,18 @@ class HealthHandler(BaseHTTPRequestHandler):
         lines.append(f'# TYPE kafka_monitor_is_connected gauge')
         lines.append(f'kafka_monitor_is_connected {1 if stats.get("is_connected", False) else 0}')
         
+        # Export age gauges only after their first successful observation.
+        # Absence means "not observed yet", not zero seconds.
+        lines.append('# HELP kafka_monitor_poll_age_seconds Seconds since last successful Kafka poll')
+        lines.append('# TYPE kafka_monitor_poll_age_seconds gauge')
+        if stats.get('poll_age_seconds') is not None:
+            lines.append(f'kafka_monitor_poll_age_seconds {stats["poll_age_seconds"]}')
+
+        lines.append('# HELP kafka_monitor_processed_commit_age_seconds Seconds since last processed-batch Kafka commit')
+        lines.append('# TYPE kafka_monitor_processed_commit_age_seconds gauge')
+        if stats.get('last_processed_commit_age_seconds') is not None:
+            lines.append(f'kafka_monitor_processed_commit_age_seconds {stats["last_processed_commit_age_seconds"]}')
+
         # Topic-specific metrics
         if 'events_by_topic' in stats:
             lines.append(f'# HELP kafka_monitor_events_by_topic Events processed per topic')
