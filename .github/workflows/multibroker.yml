@@ -1,0 +1,43 @@
+name: Kafka Multi-Broker Failover
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  broker-failover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install pinned clients and pytest
+        run: python -m pip install -r requirements.lock pytest
+      - name: Prepare disposable three-broker cluster
+        run: |
+          sudo sysctl -w vm.max_map_count=262144
+          docker compose -p kafka-monitor-failover-ci -f tests/integration/compose-multibroker.yml up -d
+      - name: Check three brokers and Elasticsearch
+        env:
+          KAFKA_TEST_BROKER: "localhost:29191,localhost:29192,localhost:29193"
+          ELASTICSEARCH_TEST_URL: "http://localhost:19201"
+          KAFKA_EXPECTED_BROKERS: "3"
+        run: python tests/integration/wait_services.py
+      - name: Test real broker leader loss and replay
+        env:
+          KAFKA_MULTIBROKER: "1"
+          KAFKA_TEST_BROKER: "localhost:29191,localhost:29192,localhost:29193"
+          ELASTICSEARCH_TEST_URL: "http://localhost:19201"
+        run: python -m pytest -q -s -m multibroker tests/integration/test_broker_failover.py
+      - name: Capture logs after failures
+        if: failure()
+        run: docker compose -p kafka-monitor-failover-ci -f tests/integration/compose-multibroker.yml logs --no-color --tail=100
+      - name: Remove all isolated CI services
+        if: always()
+        run: docker compose -p kafka-monitor-failover-ci -f tests/integration/compose-multibroker.yml down -v --remove-orphans

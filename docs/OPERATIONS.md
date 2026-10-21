@@ -64,6 +64,16 @@ After the disposable Kafka/Elasticsearch compose services are ready:
 
 The benchmark reports records/s, elapsed seconds and peak resident memory for the process. Default: 500 records of 1024 bytes, distributed across two partitions. Set KAFKA_PERF_EVENTS (1..10000) and KAFKA_PERF_BYTES (1..1048576) to model the intended workload. The GitHub Actions integration workflow also supports a manual **performance** input. Measure sustained peak workloads separately; this benchmark is a smoke test, not a production capacity forecast.
 
+## Multi-broker leader failover (isolated CI)
+
+The separate `Kafka Multi-Broker Failover` GitHub Actions workflow tests a **real loss of a partition leader** in a disposable three-broker, three-controller KRaft cluster. It uses `tests/integration/compose-multibroker.yml`, Kafka 3.9.1 and Elasticsearch 8.19.2, replicated Kafka topics (RF=3, min ISR=2), and a multi-node offset backing topic (RF=3). All published ports are bound to 127.0.0.1.
+
+The test waits for all replicas to enter the ISR, starts a monitor, pauses its first event callback, stops that partition's actual broker leader, waits for a replacement leader on a surviving broker, then indexes a record and deliberately crashes before its Kafka offset commit. A replacement monitor must replay the exported-but-unacknowledged record and process the entire backlog **while the leader remains down**. Elasticsearch must contain exactly one document per topic/partition/offset, and Kafka offsets must advance after successful export. The failed broker is restarted in cleanup.
+
+This tests real leader election and a deliberately injected commit boundary failure; it does **not** claim the failed broker itself caused the injected export/commit exception. It also does not prove tolerance of two brokers failing, network partitions, rack failures, TLS/SASL security, or sustained production rates.
+
+The three-broker test requires an explicit `KAFKA_MULTIBROKER=1` and both `CI=true` and `GITHUB_ACTIONS=true` to run the destructive container stop/start steps. Do **not** reuse the disposable compose definition as a production stack. The CI runner has a separate Compose project name, a bounded test deadline, and guaranteed teardown.
+
 ## Container deployment
 
 The example deploy/compose.example.yml starts the monitor **only**, not brokers or Elasticsearch. It enables:

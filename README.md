@@ -140,7 +140,7 @@ Elasticsearch lifecycle policies and strict mappings are versioned under `ops/el
 
 The Dockerfile pins an immutable Python base-image digest, and `requirements.lock` pins direct and transitive runtime dependencies. Updates require passing unit/integration CI and the dependency vulnerability audit.
 
-See [docs/OPERATIONS.md](docs/OPERATIONS.md) for integration commands, ILM setup, resource limits, alerts, ACL/TLS guidance, and the remaining release gates. The testing cluster disables authentication by design and is never a production deployment.
+See [docs/OPERATIONS.md](docs/OPERATIONS.md) for integration commands (including the three-broker leader-failover workflow), ILM setup, resource limits, alerts, ACL/TLS guidance, and remaining release gates. The testing cluster disables authentication by design and is never a production deployment.
 
 ## Tests and audit
 
