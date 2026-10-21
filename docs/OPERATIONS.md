@@ -52,7 +52,7 @@ Requires Docker Compose v2 and a host able to run both Java services. On Linux E
     KAFKA_INTEGRATION=1 python -m pytest -q -m integration tests/integration
     docker compose -f tests/integration/compose.yml down -v --remove-orphans
 
-Real integration scenarios include successful indexing, an uncommitted first batch with a partial Elasticsearch success and restart replay under auto.offset.reset=latest, bulk item rejection and recovery, index template/ILM, and SIGTERM plus consumer-group resume. The local default unit suite skips integration tests unless explicitly enabled.
+Real integration scenarios include successful indexing, an uncommitted first batch with a partial Elasticsearch success and restart replay under auto.offset.reset=latest, bulk item rejection and recovery, index template/ILM, SIGTERM, and a two-consumer **group rebalance with replay**. The group rebalance test observes `PreparingRebalance` via the broker coordinator and then deliberately injects rejection of a processed-offset commit; it asserts the uncommitted, already-indexed record reappears on restart and all per-partition offsets advance. Commit rejection itself is fault-injected because native broker acceptance at that precise race window is not deterministic. The test runs against a single Kafka broker; it does not simulate a broker leader or controller failure. The local default unit suite skips integration tests unless explicitly enabled.
 
 The GitHub Actions integration workflow starts and destroys these containers automatically on PRs. An integration CI failure blocks release readiness; passing does not establish production SLAs.
 
@@ -114,7 +114,7 @@ A release is not production-ready until:
 
 1. Unit tests, CI integration tests and dependency safety checks pass.
 2. Container image builds, with resolved dependency versions and reviewed base-image digest recorded for the release.
-3. Failure injection covers connection loss, rejected/partial Elasticsearch bulk, restart, SIGTERM and group rebalance against a representative Kafka cluster.
+3. Failure injection covers connection loss, rejected/partial Elasticsearch bulk, restart, SIGTERM and group rebalance against a representative Kafka cluster. A disposable two-member group test is in CI, but **multi-broker leader/controller failure** still needs a separate representative environment.
 4. A load test with representative event payload sizes, peak throughput, target partitions and deployment resource limits passes.
 5. Actual production Kafka ACLs, Elasticsearch permissions, TLS certificates, index templates/retention and monitoring alerts are validated by the operating team.
 6. Rollback to the previous image and recovery from Kafka retained events are documented and practiced.
