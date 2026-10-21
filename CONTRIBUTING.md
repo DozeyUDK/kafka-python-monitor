@@ -6,7 +6,7 @@
     cd kafka-python-monitor
     python -m venv .venv
     . .venv/bin/activate
-    pip install -r requirements.txt
+    pip install -r requirements.lock
     pip install pytest
     cp env.example .env
 

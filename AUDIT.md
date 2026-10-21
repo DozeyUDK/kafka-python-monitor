@@ -23,16 +23,16 @@ The first hardening pass removed the data-loss hazards in the source. Tests now 
 | High | Metrics were emitted using event-count modulo and could be skipped on idle workloads | Fixed: fixed periodic interval |
 | High | Consumer lag identified only partition number, conflating topics | Fixed: topic and partition metrics separated |
 | Medium | Elasticsearch connection parameters used obsolete client arguments | Fixed: explicit scheme URLs, basic_auth, api_key and verify_certs |
-| Medium | Source pinned very old Kafka client and used an import hack for six | Fixed: kafka-python 2.3.2, removed compatibility shim, Elasticsearch client pinned to 8.19.2 |
+| Medium | Source pinned very old Kafka client and used an import hack for six | Fixed: kafka-python 2.3.2, removed compatibility shim, Elasticsearch client pinned to 8.19.2; python-dotenv bumped to 1.2.2 after CI vulnerability audit |
 | Medium | The service did not have automated tests | Partial: regression unit tests with mocked clients; integration tests still required |
 | Medium | README overclaimed production readiness, duplicated config and used decorative emojis | Fixed: concise technical README with documented guarantees and deployment prerequisites |
 | Medium | HTTP endpoint defaults were not suitable for all environments | Fixed: local bind by default, explicit Docker override, limited host port exposure in example |
 | Medium | setup.py pointed to a placeholder GitHub URL and missed the CLI entrypoint module | Fixed |
-| Open | No end-to-end Kafka+Elasticsearch test against the intended production versions | BLOCKER |
-| Open | No tested recovery with Kafka leader change, ES 429/503, partial bulk rejection and process SIGTERM | BLOCKER |
-| Open | No committed infrastructure config for index templates, ILM, resource requests/limits or security ACLs | Deployment-specific blocker |
-| Open | No measured throughput/memory/performance budget for real message sizes | Deployment-specific blocker |
-| Open | Docker image is not pinned to an immutable digest and transitive dependencies are not locked | Supply chain hardening required |
+| Open | No end-to-end Kafka+Elasticsearch test against the intended production versions | CI tests now authored with disposable services; need successful CI run and deployment-specific compatibility evidence |
+| Open | No tested recovery with Kafka leader change, ES 429/503, partial bulk rejection and process SIGTERM | CI now covers injected partial bulk, real ES bulk rejection and SIGTERM/restart. Multi-broker leader change and network partitions still require validation |
+| Open | No committed infrastructure config for index templates, ILM, resource requests/limits or security ACLs | Versioned templates/ILM policies and a hardened Compose example now included. Actual deployment ACLs and resources remain deployment-specific |
+| Open | No measured throughput/memory/performance budget for real message sizes | Opt-in benchmark now available; representative target measurements and SLOs still required |
+| Resolved for baseline | Docker image was not pinned to an immutable digest and transitive dependencies were not locked | Python 3.11.17 Bookworm base image now pinned to a GitHub Actions-observed SHA256 digest; tested transitive versions pinned in requirements.lock and audited in CI. Hash-locking and periodic refresh remain future supply-chain improvements |
 
 ## Data handling contract
 
@@ -63,4 +63,4 @@ Before calling this production-ready:
 6. Configure an index template, ILM retention, Kafka permissions, Elasticsearch API key privileges, private health/metrics access and alerting.
 7. Pin the Docker base image to a reviewed digest, lock transitive package versions, scan the image for vulnerabilities and run as non-root.
 
-Audit changes are under review in Draft PR #2. The PR has not been merged or deployed.
+PR #2 has been merged. A subsequent PR contains integration, operations and security checks; it has not been deployed.

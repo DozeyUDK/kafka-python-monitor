@@ -1,0 +1,55 @@
+name: Kafka Elasticsearch Integration
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      performance:
+        description: "Run optional performance smoke benchmark"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install real Kafka and Elasticsearch clients
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.lock pytest
+          python -c "import kafka, elasticsearch; print('Kafka:', kafka.__version__); print('Elasticsearch:', elasticsearch.__version__)"
+      - name: Prepare disposable integration services
+        run: |
+          sudo sysctl -w vm.max_map_count=262144
+          docker compose -f tests/integration/compose.yml up -d
+      - name: Wait for real Kafka and Elasticsearch
+        run: python tests/integration/wait_services.py
+      - name: Run real client integration and fault injection tests
+        env:
+          KAFKA_INTEGRATION: "1"
+          KAFKA_TEST_BROKER: "localhost:29092"
+          ELASTICSEARCH_TEST_URL: "http://localhost:19200"
+        run: python -m pytest -q -m integration tests/integration
+      - name: Optional performance smoke benchmark
+        if: github.event_name == 'workflow_dispatch' && inputs.performance == true
+        env:
+          KAFKA_INTEGRATION: "1"
+          KAFKA_TEST_BROKER: "localhost:29092"
+          ELASTICSEARCH_TEST_URL: "http://localhost:19200"
+        run: python -m pytest -q -s -m performance tests/integration/test_performance.py
+      - name: Service logs on failure
+        if: failure()
+        run: docker compose -f tests/integration/compose.yml logs --no-color --tail=100
+      - name: Remove disposable services and volumes
+        if: always()
+        run: docker compose -f tests/integration/compose.yml down -v --remove-orphans

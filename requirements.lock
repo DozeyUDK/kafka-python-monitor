@@ -1,0 +1,11 @@
+# Pinned Python 3.11 runtime dependency set, resolved from GitHub Actions environment.
+# Regenerate and review after dependency updates. Hashes are not pinned here.
+certifi==2026.10.19
+elastic-transport==8.19.0
+elasticsearch==8.19.2
+kafka-python==2.3.2
+python-dateutil==2.9.0.post0
+python-dotenv==1.2.2
+six==1.17.0
+typing-extensions==4.16.0
+urllib3==2.8.0
