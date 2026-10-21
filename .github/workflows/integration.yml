@@ -40,12 +40,28 @@ jobs:
           KAFKA_TEST_BROKER: "localhost:29092"
           ELASTICSEARCH_TEST_URL: "http://localhost:19200"
         run: python -m pytest -q -m integration tests/integration
-      - name: Optional performance smoke benchmark
+      - name: Bounded load correctness gate
+        env:
+          KAFKA_INTEGRATION: "1"
+          KAFKA_TEST_BROKER: "localhost:29092"
+          ELASTICSEARCH_TEST_URL: "http://localhost:19200"
+          KAFKA_PERF_EVENTS: "600"
+          KAFKA_PERF_BYTES: "1024"
+          KAFKA_PERF_PARTITIONS: "2"
+          KAFKA_PERF_DURATION_SECONDS: "8"
+          KAFKA_PERF_MAX_RSS_MIB: "512"
+        run: python -m pytest -q -s -m performance tests/integration/test_performance.py
+      - name: Optional sustained paced load profile
         if: github.event_name == 'workflow_dispatch' && inputs.performance == true
         env:
           KAFKA_INTEGRATION: "1"
           KAFKA_TEST_BROKER: "localhost:29092"
           ELASTICSEARCH_TEST_URL: "http://localhost:19200"
+          KAFKA_PERF_EVENTS: "3000"
+          KAFKA_PERF_BYTES: "2048"
+          KAFKA_PERF_PARTITIONS: "2"
+          KAFKA_PERF_DURATION_SECONDS: "90"
+          KAFKA_PERF_MAX_RSS_MIB: "512"
         run: python -m pytest -q -s -m performance tests/integration/test_performance.py
       - name: Service logs on failure
         if: failure()

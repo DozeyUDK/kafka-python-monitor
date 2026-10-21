@@ -36,6 +36,8 @@ Then run:
 
 With ELASTICSEARCH_ENABLED=false, the monitor only consumes records, emits metrics and runs callbacks. It **does not** persist events to Elasticsearch.
 
+The integration CI also runs a bounded, paced Kafka-to-Elasticsearch load correctness gate (document completeness, committed offsets, latency percentiles, throughput and RSS). See [operations](docs/OPERATIONS.md) for its separate manual 90-second profile and deployment-specific limitations.
+
 Do not commit real credentials to Git. Use secrets injection or mounted read-only files in production.
 
 ## Docker
